@@ -4,7 +4,7 @@ Compile **Airtable**, **Google Sheets** and **Excel** formulas into **JavaScript
 with the source program's own rules for blanks, type coercion, rounding and errors.
 
 ```ts
-import { compile } from "@formula-compiler/core";
+import { compile } from "@musictwo2117/formula-compiler";
 
 const { evaluate } = compile('IF(AND({รายได้}>30000, {อายุ}<60), "ผ่าน", "ไม่ผ่าน")', { from: "airtable", to: "js" });
 evaluate({ "รายได้": 40000, "อายุ": 30 }); // "ผ่าน"
@@ -20,7 +20,7 @@ evaluate({ "รายได้": 40000, "อายุ": 30 }); // "ผ่าน"
 ## Install
 
 ```bash
-npm install @formula-compiler/core
+npm install @musictwo2117/formula-compiler
 ```
 
 Node 18+. ESM and CommonJS builds, TypeScript types included.
@@ -59,7 +59,7 @@ r.evaluate({ sales: 10, visits: 4 }); // 2.5
 
 Errors come back as `FormulaError` values (`isError(v)`, `v.code === "#DIV/0!"`). Whole-column ranges read
 `ctx.rows`: `evaluate(row, { rows })`. To run the generated `code` yourself, pass `runtimeFor(dialect)`
-(also exported from `@formula-compiler/core/runtime`) as `rt`.
+(also exported from `@musictwo2117/formula-compiler/runtime`) as `rt`.
 
 Generated code for the Airtable example:
 
@@ -131,11 +131,11 @@ Codes: `SYNTAX`, `UNKNOWN_FUNCTION`, `UNSUPPORTED_FUNCTION`, `ARITY`, `INVALID_A
 
 ## CLI
 
-Installed, the command is `formula-compiler`; without installing, use `npx @formula-compiler/core`.
+Installed, the command is `formula-compiler`; without installing, use `npx @musictwo2117/formula-compiler`.
 
 ```bash
-npx @formula-compiler/core "=IF(B2>30000, \"ok\", \"no\")" --from excel --to sql --columns B=income:number
-npx @formula-compiler/core "IF({Age} < 60, 'yes')" --from airtable --to js --eval '{"Age": 30}'
+npx @musictwo2117/formula-compiler "=IF(B2>30000, \"ok\", \"no\")" --from excel --to sql --columns B=income:number
+npx @musictwo2117/formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to js --eval '{"Age": 30}'
 ```
 
 `--columns B=income,C=age` maps columns; add `:number` / `:text` / `:boolean` (or `--types income=number`)
