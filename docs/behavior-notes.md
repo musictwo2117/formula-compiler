@@ -1,16 +1,12 @@
 # Behavior notes
 
-How formula-compiler reproduces each program, and how each rule was established.
-
-- **Airtable** and **Google Sheets** rules were checked on 2026-10-28 by running the formulas in a real
-  Airtable base and a real Google Sheet and reading the computed values. The cases named
-  "(checked in … 2026-10-28)" in `tests/cases/*.json` are those probes.
-- **Excel** could not be run; its rules follow Microsoft's documentation and well-known behaviour.
-  Anything not confirmed is flagged `unverified` in `tests/cases/excel.json` (it still runs, and adds an
-  `it.todo("verify against excel …")`).
+How formula-compiler reproduces each program. Every rule here was checked on 2026-10-28 by running the
+formulas in the real program and reading the computed values: a real **Airtable** base, a real
+**Google Sheet**, and **Excel for the web**. The cases named "(checked in … 2026-10-28)" in
+`tests/cases/*.json` are those probes; there are no unverified cases left.
 
 JS and SQL always agree with each other — the test-suite checks every runnable case on both. Please send
-a PR (with the program and date) if you can confirm or correct a rule.
+a PR (with the program and date) if a program's behaviour changes.
 
 ## Shared model
 
@@ -120,25 +116,25 @@ Airtable behaves much like JavaScript.
   numbers; `""` matches empty cells; an empty criterion **cell** matches nothing; wildcards and case
   rules as in `SEARCH`.
 
-## Excel (documentation, not run)
+## Excel (checked in Excel for the web)
 
 - Same as Sheets except where listed here.
 - `ROUND`, `ROUNDUP`, `ROUNDDOWN` require `num_digits`.
-- `0^0` is `#NUM!`; `0^-1` is `#DIV/0!`.
+- `0^0` is `#NUM!`; `0^-1` is `#DIV/0!`; `-3^2` is 9.
 - An empty referenced cell as the whole result shows `0` (`=B2` with B2 empty → 0); in SQL that makes a
   nullable text result `jsonb`.
-- Text in arithmetic: plain decimals only (`""+1` is `#VALUE!`).
-- Number → text: 15 significant digits, written out in full (no `1E+21` switch implemented).
-- Typed numbers keep 15 significant digits (documented by Microsoft).
-- `TRIM` removes only spaces. `LEN` counts code points.
+- Text in arithmetic and `VALUE()`: `"$1,000"`, `"1,234.5"`, `"50%"`, `"(5)"`, `"-$5"`, `"$-5"`, `"+5"`,
+  `".5"`, `"5."`, `" 3 "` and — unlike Sheets — exponents (`"1e3"`, `"$1e3"`, `"1.5E+3%"` = 15) are numbers.
+  `""` (unlike Sheets), `" "`, `"(-5)"`, `"5%%"` and `"1,00"` are `#VALUE!`.
+- Number → text: 15 significant digits, written out in full while that takes at most 20 characters
+  (`1E+19` → 20 digits, `1.5E-15` → `0.0000000000000015`), otherwise scientific: `1E+20`, `-1E+20`, `1E-19`,
+  `3.33333333333333E-13`, `1.18059162071741E+21`.
+- Typed numbers keep 15 significant digits.
+- `FIND("", "abc", 4)` is 4 and `FIND("", "")` is 1 (a start one past the end is allowed);
+  `SEARCH("", "abc", 4)` and `FIND("", "abc", 5)` are `#VALUE!`.
+- `TRIM` removes only spaces (tabs stay). `LEN` of an emoji is 1.
+- `SWITCH` is case-insensitive.
+- `COUNTIF`: `"5"` and `5` also match cells holding the text `"5"`, while `"<>5"` and `">4"` only look at
+  numbers (as in Sheets). **An empty criterion cell means 0** (it counts zeros, not empty cells).
 - Structured references: `[@col]`, `[@[col with spaces]]`, `Table1[@col]`, `Table1[[#This Row],[col]]`, and
   `Table1[col]` / `[col]` as whole columns inside aggregates. `'` escapes `[ ] # '` inside names.
-
-_Unverified_ (in `tests/cases/excel.json`):
-
-- `SWITCH` compares text case-insensitively, like `=` (true in Sheets).
-
-_Not checked (current Excel behaviour in formula-compiler, which differs from Sheets)_: `COUNTIF` with an
-empty criterion cell matches empty cells; `COUNTIF(range, "5")` does not match text cells; `VALUE("")`,
-`VALUE("50%")` and `VALUE("$1,000")` are `#VALUE!`; numbers are never written in scientific notation;
-`TRIM` keeps tabs; `LEN` of an emoji is 1.

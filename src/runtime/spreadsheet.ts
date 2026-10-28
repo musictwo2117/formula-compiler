@@ -6,6 +6,7 @@
 import {
   FormulaError,
   NUMERIC_TEXT,
+  excelNumber,
   sheetsNumber,
   chars,
   column,
@@ -31,8 +32,7 @@ const e = (code: string) => new FormulaError(code);
 
 /** Text as a number: Excel takes plain decimals; Sheets also "$1,000", "50%", "(5)" and "" (= 0), but not "1e3". */
 export function textToNumber(x: string, variant: SpreadsheetVariant): number | undefined {
-  if (variant === "sheets") return x === "" ? 0 : sheetsNumber(x);
-  return NUMERIC_TEXT.test(x) ? Number(x.trim()) : undefined;
+  return variant === "sheets" ? (x === "" ? 0 : sheetsNumber(x)) : excelNumber(x);
 }
 
 export function toNumber(x: Value, variant: SpreadsheetVariant = "excel"): number | FormulaError {
@@ -47,8 +47,14 @@ export function toNumber(x: Value, variant: SpreadsheetVariant = "excel"): numbe
 export function numberToText(n: number, variant: SpreadsheetVariant = "excel"): string {
   if (n === 0) return "0";
   const a = Math.abs(n);
-  if (variant === "sheets" && (a >= 1e21 || a < 1e-10)) return n.toExponential(14).replace(/\.?0+e/, "e").toUpperCase();
-  return n.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 15 });
+  const sci = () => n.toExponential(14).replace(/\.?0+e/, "e").toUpperCase();
+  if (variant === "sheets") {
+    if (a >= 1e21 || a < 1e-10) return sci();
+    return n.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 15 });
+  }
+  // Excel writes the number out in full up to 20 characters, else 1E+20 / 3.33333333333333E-13.
+  const plain = n.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 15 });
+  return plain.replace("-", "").length > 20 ? sci().replace(/E([+-])(\d)$/, (_, sign: string, d: string) => `E${sign}0${d}`) : plain;
 }
 
 export function toText(x: Value, variant: SpreadsheetVariant = "excel"): string | FormulaError {
@@ -171,7 +177,8 @@ export interface Criterion {
 }
 
 export function parseCriterion(c: Plain, variant: SpreadsheetVariant = "excel"): Criterion {
-  if (c === null) return { op: "=", operand: { kind: variant === "sheets" ? "nothing" : "blank" } };
+  // An empty criterion cell matches nothing in Sheets and means 0 in Excel.
+  if (c === null) return variant === "sheets" ? { op: "=", operand: { kind: "nothing" } } : { op: "=", operand: { kind: "number", value: 0 } };
   if (typeof c === "number") return { op: "=", operand: { kind: "number", value: c } };
   if (typeof c === "boolean") return { op: "=", operand: { kind: "boolean", value: c } };
   const m = /^(<=|>=|<>|<|>|=)?([\s\S]*)$/.exec(c)!;
@@ -202,8 +209,8 @@ export function matchesCriterion(cell: Value, crit: Criterion, variant: Spreadsh
       if (isNe) return cell !== null && cell !== "";
       return false;
     case "number":
-      // Sheets: "=5" also matches the text "5" (but "<>5" does not exclude it).
-      if (variant === "sheets" && isEq && typeof cell === "string") return textToNumber(cell, variant) === operand.value && cell !== "";
+      // "=5" also matches the text "5" (but "<>5" does not exclude it), in Sheets and Excel.
+      if (isEq && typeof cell === "string") return cell !== "" && textToNumber(cell, variant) === operand.value;
       if (typeof cell !== "number") return isNe;
       if (isEq) return cell === operand.value;
       if (isNe) return cell !== operand.value;
@@ -227,6 +234,8 @@ export function matchesCriterion(cell: Value, crit: Criterion, variant: Spreadsh
 }
 
 // ---------------------------------------------------------------- runtime
+
+const findText = (n: string, h: string, from: number): number => indexOfChars(chars(h), chars(n), from);
 
 export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
   const A = (a: Value, b: Value, f: (x: number, y: number) => number | FormulaError) => arith(a, b, f, variant);
@@ -259,7 +268,9 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
       const ts = TX([needle, hay]);
       if (isError(ts)) return ts;
       const [n, h] = ts as [string, string];
-      if (s < 1 || s > chars(h).length) return e(VALUE);
+      // Excel FIND accepts a start one past the end (FIND("", "abc", 4) = 4); SEARCH and Sheets do not.
+      const last = chars(h).length + (variant === "excel" && f === findText ? 1 : 0);
+      if (s < 1 || s > last) return e(VALUE);
       const pos = f(n, h, s - 1);
       return pos < 0 ? e(VALUE) : pos + 1;
     };
@@ -450,7 +461,7 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
       if (s < 1 || k < 0) return e(VALUE);
       return chars(t).slice(s - 1, s - 1 + k).join("");
     },
-    FIND: findLike((n, h, from) => indexOfChars(chars(h), chars(n), from)),
+    FIND: findLike(findText),
     SEARCH: findLike(search),
     SUBSTITUTE(x: Value, o: Value, n: Value, instance?: Value): Value {
       let idx: number | undefined;

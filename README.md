@@ -200,8 +200,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 
 ## Limitations
 
-- **Airtable and Google Sheets rules were checked against the real programs** (2026-10-28); Excel rules
-  follow Microsoft's documentation and were not run. See [docs/behavior-notes.md](docs/behavior-notes.md).
+- **Every rule was checked against the real programs** (Airtable, Google Sheets and Excel for the web,
+  2026-10-28). See [docs/behavior-notes.md](docs/behavior-notes.md).
 - Airtable field names are matched exactly as written (Airtable itself is case-insensitive), and the JS
   target needs `fieldTypes` to tell an empty text field from an empty number field.
 - References: only cells in the formula's own row, and whole columns (`A:A`, `Table1[col]`) inside `SUM`,

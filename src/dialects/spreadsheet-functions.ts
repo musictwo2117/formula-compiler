@@ -8,7 +8,7 @@ import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { FieldType } from "../core/types";
 import type { JsGen } from "../codegen/js";
-import { errorIf, quoteText, sheetsNumberSql, sqlNumber, type SqlGen, type SqlVal } from "../codegen/sql";
+import { errorIf, quoteText, spreadsheetNumberSql, sqlNumber, type SqlGen, type SqlVal } from "../codegen/sql";
 import { NUMERIC_TEXT_SQL, type RoundMode } from "../runtime/common";
 import { parseCriterion, type Criterion, type SpreadsheetVariant } from "../runtime/spreadsheet";
 import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, roundDigits, roundSql, sqlArgs, substituteNthSql, textSql } from "./shared";
@@ -87,9 +87,9 @@ function operandSql(col: string, type: FieldType, op: CriterionOp, operand: SqlO
       if (op === "<>") return type === "text" ? `COALESCE(${col} <> '', FALSE)` : `${col} IS NOT NULL`;
       return "FALSE";
     case "number":
-      if (variant === "sheets" && type === "text" && op === "=") {
-        // Sheets: "=5" also matches the text "5".
-        const p = sheetsNumberSql(col);
+      if (type === "text" && op === "=") {
+        // "=5" also matches the text "5" (Sheets and Excel).
+        const p = spreadsheetNumberSql(col, variant);
         return `COALESCE(${col} <> '' AND ${p.valid} AND ${p.v} = ${operand.sql}, FALSE)`;
       }
       if (type !== "number") return ne;
@@ -404,7 +404,7 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
         if (a.kind === "column") return a.type === "number" ? g.columnQuery(a.node.name, a.node, (col) => `COUNT(${col})::float8`) : "0::float8";
         if (a.kind === "ref") return a.type === "number" ? `CASE WHEN ${a.v} IS NULL THEN 0::float8 ELSE 1::float8 END` : "0::float8";
         const p = g.dispatch(a.val, (k) => ({
-          v: k.k === "number" || k.k === "boolean" ? "1::float8" : k.k === "text" ? `CASE WHEN ${variant === "sheets" ? `${k.e} = '' OR ${sheetsNumberSql(k.e).valid}` : `${k.e} ~ ${RE}`} THEN 1::float8 ELSE 0::float8 END` : "0::float8",
+          v: k.k === "number" || k.k === "boolean" ? "1::float8" : k.k === "text" ? `CASE WHEN ${variant === "sheets" ? `${k.e} = '' OR ` : ""}${spreadsheetNumberSql(k.e, variant).valid} THEN 1::float8 ELSE 0::float8 END` : "0::float8",
           err: null,
         }));
         return a.val.err === null ? p.v : `CASE WHEN ${a.val.err} IS NOT NULL THEN 0::float8 ELSE ${p.v} END`;
@@ -441,7 +441,11 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
     const where = (col: string, t: FieldType) =>
       g.dispatch(val, (a) => {
         switch (a.k) {
-          case "blank": return { v: operandSql(col, t, "=", { kind: variant === "sheets" ? "nothing" : "blank" }, variant), err: null };
+          case "blank": {
+            // An empty criterion cell matches nothing in Sheets and means 0 in Excel.
+            const operand: SqlOperand = variant === "sheets" ? { kind: "nothing" } : { kind: "number", sql: "0::float8" };
+            return { v: operandSql(col, t, "=", operand, variant), err: null };
+          }
           case "number": return { v: operandSql(col, t, "=", { kind: "number", sql: a.e }, variant), err: null };
           case "boolean": return { v: operandSql(col, t, "=", { kind: "boolean", sql: a.e }, variant), err: null };
           case "text": return { v: dynamicTextCriterionSql(col, t, a.e, variant), err: null };
@@ -581,7 +585,9 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
           p = name === "FIND" ? `strpos(substr(${hay.v}, ${S}), ${needle.v})` : `strpos(substr(lower(${hay.v}), ${S}), lower(${needle.v}))`;
           v = `(${p} + ${S} - 1)::float8`;
         }
-        const err = `CASE WHEN trunc(${start.v}) < 1 OR trunc(${start.v}) > length(${hay.v}) THEN '#VALUE!' WHEN ${p} = 0 THEN '#VALUE!' END`;
+        // Excel FIND accepts a start one past the end (FIND("", "abc", 4) = 4); SEARCH and Sheets do not.
+        const last = name === "FIND" && variant === "excel" ? `length(${hay.v}) + 1` : `length(${hay.v})`;
+        const err = `CASE WHEN trunc(${start.v}) < 1 OR trunc(${start.v}) > ${last} THEN '#VALUE!' WHEN ${p} = 0 AND ${needle.v} <> '' THEN '#VALUE!' END`;
         return g.make("number", v, [start.err, needle.err, hay.err, err]);
       },
     });

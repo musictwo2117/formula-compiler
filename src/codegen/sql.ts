@@ -13,7 +13,7 @@ import type { BinaryOperator, BoundCall, BoundNode, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { CompileOptions, Dialect, FieldType } from "../core/types";
-import { JS_NUMBER_TEXT_SQL, NUMERIC_TEXT, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, jsNumber, sheetsNumber } from "../runtime/common";
+import { EXCEL_NUMBER_TEXT_SQL, JS_NUMBER_TEXT_SQL, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, excelNumber, jsNumber, sheetsNumber } from "../runtime/common";
 
 export type SqlType = "number" | "text" | "boolean" | "blank" | "any";
 
@@ -134,12 +134,27 @@ export function sheetsNumberSql(e: string): { v: string; valid: string } {
   return { v, valid };
 }
 
-/** Number → text: 15 significant digits; Sheets switches to 1E+21 / 1E-11 outside [1e-10, 1e21). */
+/**
+ * Number → text: 15 significant digits. Sheets switches to 1E+21 / 1E-11 outside [1e-10, 1e21);
+ * Excel writes up to 20 characters in full, else 1E+20 / 3.33333333333333E-13.
+ */
 function spreadsheetNumberText(e: string, variant: "sheets" | "excel"): string {
   const plain = `trim_scale((${e})::numeric)::text`;
-  if (variant === "excel") return plain;
   const sci = `upper(regexp_replace(btrim(to_char(${e}, '9.99999999999999EEEE')), '\\.?0*e', 'e'))`;
-  return `CASE WHEN ${e} = 0 THEN '0' WHEN abs(${e}) >= 1e21 OR abs(${e}) < 1e-10 THEN ${sci} ELSE ${plain} END`;
+  const useSci = variant === "sheets" ? `abs(${e}) >= 1e21 OR abs(${e}) < 1e-10` : `length(ltrim(${plain}, '-')) > 20`;
+  return `CASE WHEN ${e} = 0 THEN '0' WHEN ${useSci} THEN ${sci} ELSE ${plain} END`;
+}
+
+/** Excel text → number (see excelNumber()); value and validity as SQL. */
+export function excelNumberSql(e: string): { v: string; valid: string } {
+  const valid = `(${e} ~ ${quoteText(EXCEL_NUMBER_TEXT_SQL)} AND (${e} ~ '\\(') = (${e} ~ '\\)') AND ${e} !~ '^\\s*\\(?[+-]?\\$?[+-]\\$?[+-]' AND ${e} !~ '^\\s*[+-]\\$?[+-]' AND NOT (${e} ~ '^\\s*\\(\\$?[+-]'))`;
+  const v = `((regexp_replace(${e}, '[$,()%[:space:]]', '', 'g'))::float8 * CASE WHEN ${e} ~ '\\(' THEN -1 ELSE 1 END / CASE WHEN ${e} ~ '%' THEN 100 ELSE 1 END)`;
+  return { v, valid };
+}
+
+/** Text → number SQL for a spreadsheet variant. */
+export function spreadsheetNumberSql(e: string, variant: "sheets" | "excel"): { v: string; valid: string } {
+  return variant === "sheets" ? sheetsNumberSql(e) : excelNumberSql(e);
 }
 
 export const spreadsheetSemantics = (variant: "sheets" | "excel"): Semantics => ({
@@ -164,9 +179,11 @@ export const spreadsheetSemantics = (variant: "sheets" | "excel"): Semantics => 
           };
         }
         if (typeof a.lit === "string") {
-          return NUMERIC_TEXT.test(a.lit) ? { v: sqlNumber(Number(a.lit.trim())), err: null } : { v: "NULL::float8", err: "'#VALUE!'" };
+          const n = excelNumber(a.lit);
+          return n === undefined ? { v: "NULL::float8", err: "'#VALUE!'" } : { v: sqlNumber(n), err: null };
         }
-        return { v: `CASE WHEN ${a.e} ~ ${RE} THEN (${a.e})::float8 END`, err: `CASE WHEN ${a.e} ~ ${RE} THEN NULL ELSE '#VALUE!' END` };
+        const p = excelNumberSql(a.e);
+        return { v: `CASE WHEN ${p.valid} THEN ${p.v} END`, err: `CASE WHEN ${p.valid} THEN NULL ELSE '#VALUE!' END` };
     }
   },
   toText(a) {

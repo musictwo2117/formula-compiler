@@ -207,3 +207,21 @@ export function truncateTo15Digits(text: string): string {
   }
   return exp === undefined ? out : `${out}e${exp}`;
 }
+
+// ---------------------------------------------------------------- Excel
+
+/**
+ * Text Excel reads as a number: like Sheets ("$1,000", "50%", "(5)", "-$5") plus an exponent
+ * ("1e3", "1.5E+3%" = 15); "" and "(-5)" are not numbers. Checked against Excel for the web.
+ */
+export const EXCEL_NUMBER_TEXT = /^\s*(\()?([+-])?\$?([+-])?((\d{1,3}(,\d{3})+|\d+)(\.\d*)?|\.\d+)([eE][+-]?\d+)?(%)?(\))?\s*$/;
+export const EXCEL_NUMBER_TEXT_SQL = "^\\s*(\\()?([+-])?\\$?([+-])?((\\d{1,3}(,\\d{3})+|\\d+)(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?(%)?(\\))?\\s*$";
+
+export function excelNumber(s: string): number | undefined {
+  const m = EXCEL_NUMBER_TEXT.exec(s);
+  if (!m || Boolean(m[1]) !== Boolean(m[10]) || (m[2] && m[3]) || (m[1] && (m[2] || m[3]))) return undefined;
+  let n = Number(s.replace(/[$,()%\s]/g, ""));
+  if (m[1]) n = -n;
+  if (m[9]) n = n / 100;
+  return n;
+}
