@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [18, 20, 22]
+        # vitest 5 needs Node 22.12 or later; older Node versions are covered by the compat job.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,3 +22,33 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node dist/cli.cjs "=IF(B2>1, \"a\", \"b\")" --from excel --to sql --columns B=x:number
+
+  # The package supports Node >= 18: build on Node 22, then run the built package on older versions.
+  compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version
+      - run: node dist/cli.cjs "=IF(B2>1, \"a\", \"b\")" --from excel --to sql --columns B=x:number
+      - name: CommonJS import
+        run: >-
+          node -e 'const { compile } = require("./dist/index.cjs");
+          const f = compile("=EDATE(DATE(2024,1,31),1)", { from: "excel", to: "js" });
+          if (f.evaluate({}) !== 45351) throw new Error("got " + f.evaluate({}));'
+      - name: ESM import
+        run: >-
+          node --input-type=module -e 'import { compile } from "./dist/index.js";
+          const f = compile("IF({a} > 1, \"big\", \"small\")", { from: "airtable", to: "js" });
+          if (f.evaluate({ a: 2 }) !== "big") throw new Error("got " + f.evaluate({ a: 2 }));'
