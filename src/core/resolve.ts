@@ -66,7 +66,7 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
     return { kind: "field", name: columnField(a.col, span, display), start: span.start, end: span.end };
   }
 
-  function visit(node: Node, columnAllowed: boolean): BoundNode {
+  function visit(node: Node, columnAllowed: boolean, tableAllowed = false): BoundNode {
     const span = { start: node.start, end: node.end };
     switch (node.type) {
       case "Number":
@@ -88,7 +88,13 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
           return fail("UNSUPPORTED_REFERENCE", `Range ${text}: bounded ranges are not supported yet; only same-row cells and whole columns (A:A) inside aggregate functions`, node.start, node.end);
         }
         if (node.from.col !== node.to.col) {
-          return fail("UNSUPPORTED_REFERENCE", `Range ${text} spans several columns; only single whole columns (A:A) are supported`, node.start, node.end);
+          if (!tableAllowed) {
+            return fail("UNSUPPORTED_REFERENCE", `Range ${text} spans several columns; multi-column ranges are only supported as the table of VLOOKUP / INDEX`, node.start, node.end);
+          }
+          const [a, b] = [colNumber(node.from.col), colNumber(node.to.col)].sort((x, y) => x - y) as [number, number];
+          const names: string[] = [];
+          for (let c = a; c <= b; c++) names.push(columnField(colLetters(c), span, text));
+          return { kind: "table", names, ...span };
         }
         if (!columnAllowed) return fail("UNSUPPORTED_REFERENCE", `Range ${text}: ${AGGREGATE_HINT}`, node.start, node.end);
         return { kind: "column", name: columnField(node.from.col, span, text), ...span };
@@ -114,10 +120,10 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
         if (n < spec.minArgs || n > spec.maxArgs) {
           return fail("ARITY", `${node.name} expects ${describeArity(spec)} but got ${n}`, node.start, node.end, node.name);
         }
-        const args = node.args.map((a, i) => visit(a, isColumnArg(spec, i)));
+        const args = node.args.map((a, i) => visit(a, isColumnArg(spec, i), spec.tableArgs?.includes(i) ?? false));
         for (const i of spec.requiredColumnArgs ?? []) {
           const a = args[i];
-          if (a && a.kind !== "column") {
+          if (a && a.kind !== "column" && a.kind !== "table") {
             fail("INVALID_ARGUMENT", `Argument ${i + 1} of ${node.name} must be a whole-column range (e.g. A:A) in this version`, a.start, a.end, node.name);
           }
         }
@@ -148,4 +154,16 @@ function normalizeColumnMap(map: Record<string, string> | undefined): Map<string
   const out = new Map<string, string>();
   for (const [col, field] of Object.entries(map)) out.set(col.replace(/\$/g, "").toUpperCase(), field);
   return out;
+}
+
+function colNumber(col: string): number {
+  let n = 0;
+  for (const c of col) n = n * 26 + (c.charCodeAt(0) - 64);
+  return n;
+}
+
+function colLetters(n: number): string {
+  let s = "";
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
 }

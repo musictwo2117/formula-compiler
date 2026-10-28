@@ -10,6 +10,7 @@ import {
   sheetsNumber,
   chars,
   column,
+  dateField,
   indexOfChars,
   isError,
   isRefArg,
@@ -17,10 +18,14 @@ import {
   roundDecimal,
   substituteText,
   wildcardToRegexSource,
+  type EvalContext,
   type RefArg,
   type RoundMode,
   type Value,
 } from "./common";
+import { spreadsheetDateFunctions } from "./spreadsheet-dates";
+import { spreadsheetLookupFunctions } from "./spreadsheet-lookups";
+import { fromRealSerial, isoDateSerial } from "./dates";
 
 export type SpreadsheetVariant = "sheets" | "excel";
 type Thunk = () => Value;
@@ -32,7 +37,10 @@ const e = (code: string) => new FormulaError(code);
 
 /** Text as a number: Excel takes plain decimals; Sheets also "$1,000", "50%", "(5)" and "" (= 0), but not "1e3". */
 export function textToNumber(x: string, variant: SpreadsheetVariant): number | undefined {
-  return variant === "sheets" ? (x === "" ? 0 : sheetsNumber(x)) : excelNumber(x);
+  const n = variant === "sheets" ? (x === "" ? 0 : sheetsNumber(x)) : excelNumber(x);
+  if (n !== undefined) return n;
+  const d = isoDateSerial(x);
+  return d === undefined ? undefined : fromRealSerial(d, variant);
 }
 
 export function toNumber(x: Value, variant: SpreadsheetVariant = "excel"): number | FormulaError {
@@ -238,6 +246,12 @@ export function matchesCriterion(cell: Value, crit: Criterion, variant: Spreadsh
 const findText = (n: string, h: string, from: number): number => indexOfChars(chars(h), chars(n), from);
 
 export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
+  /** Real-calendar serials of date fields → the program's serials (Excel's 1900 offset). */
+  const toCalendar = (v: Value): Value => (typeof v === "number" ? fromRealSerial(v, variant) : v);
+  const dateColumn = (ctx: EvalContext | undefined, name: string, type?: string): RefArg => {
+    const c = column(ctx, name, type);
+    return type === "date" ? { ref: true, values: c.values.map(toCalendar) } : c;
+  };
   const A = (a: Value, b: Value, f: (x: number, y: number) => number | FormulaError) => arith(a, b, f, variant);
   const N = (x: Value) => toNumber(x, variant);
   const X = (x: Value) => toText(x, variant);
@@ -276,10 +290,14 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
     };
 
   return {
+    ...spreadsheetDateFunctions(N, X, variant),
+    ...spreadsheetLookupFunctions(N, toBool, (ctx, name, type) => dateColumn(ctx, name, type)),
     v: normalize,
+    /** Date fields as serials in the program's calendar. */
+    date: (raw: unknown, name: string): Value => toCalendar(dateField(raw, name)),
     err: (code: string): Value => e(code),
     ref: (x: Value): RefArg => ({ ref: true, values: [x] }),
-    col: column,
+    col: (ctx: EvalContext | undefined, name: string, type?: string): RefArg => dateColumn(ctx, name, type),
     /** Excel shows an empty referenced cell as 0 when it is the whole result; Sheets shows it empty. */
     result: (x: Value): Value => (variant === "excel" && x === null ? 0 : x),
 

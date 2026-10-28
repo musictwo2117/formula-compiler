@@ -13,6 +13,7 @@ import type { BinaryOperator, BoundCall, BoundNode, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { CompileOptions, Dialect, FieldType } from "../core/types";
+import { ISO_DATE_TEXT_SQL, fromRealSerial, isoDateSerial } from "../runtime/dates";
 import { EXCEL_NUMBER_TEXT_SQL, JS_NUMBER_TEXT_SQL, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, excelNumber, jsNumber, matchFieldName, sheetsNumber } from "../runtime/common";
 
 export type SqlType = "number" | "text" | "boolean" | "blank" | "any";
@@ -86,6 +87,11 @@ export function caseOf(arms: { when: string | null; then: string }[]): string {
   return `${out} END`;
 }
 
+/** Spreadsheet serial number (days since 1899-12-30, time as the fraction) of a timestamp/date expression. */
+export function sqlTimestampSerial(ts: string): string {
+  return `(EXTRACT(EPOCH FROM ((${ts})::timestamp - TIMESTAMP '1899-12-30 00:00:00'))::float8 / 86400)`;
+}
+
 export function errorIf(cond: string, code: string): string {
   return `CASE WHEN ${cond} THEN ${quoteText(code)} END`;
 }
@@ -152,9 +158,30 @@ export function excelNumberSql(e: string): { v: string; valid: string } {
   return { v, valid };
 }
 
-/** Text → number SQL for a spreadsheet variant. */
+/** ISO date text → serial in SQL without casts that could raise (see isoDateSerial()). */
+export function isoDateSerialSql(e: string): { v: string; valid: string } {
+  const t = `btrim(${e})`;
+  const num = (from: number, len: number) => `substring(${t} from ${from} for ${len})::int`;
+  const [y, mo, d] = [num(1, 4), num(6, 2), num(9, 2)];
+  const hasTime = `length(${t}) > 10`;
+  const h = `CASE WHEN ${hasTime} THEN ${num(12, 2)} ELSE 0 END`;
+  const mi = `CASE WHEN ${hasTime} THEN ${num(15, 2)} ELSE 0 END`;
+  const s = `CASE WHEN length(${t}) > 16 THEN ${num(18, 2)} ELSE 0 END`;
+  const day = `((make_date(${y}, 1, 1) + make_interval(months => ${mo} - 1))::date + (${d} - 1))`;
+  const shape = `${e} ~ ${quoteText(ISO_DATE_TEXT_SQL)}`;
+  // CASE keeps the substring casts away from text that is not in ISO form.
+  const ok = `CASE WHEN ${shape} THEN ${mo} BETWEEN 1 AND 12 AND ${d} >= 1 AND EXTRACT(DAY FROM ${day}) = ${d} AND ${h} <= 23 AND ${mi} <= 59 AND ${s} <= 59 ELSE FALSE END`;
+  const v = `CASE WHEN ${ok} THEN (${day} - DATE '1899-12-30')::float8 + (${h} * 3600 + ${mi} * 60 + ${s})::float8 / 86400 END`;
+  return { v, valid: ok };
+}
+
+/** Text → number SQL for a spreadsheet variant (numbers first, then ISO dates). */
 export function spreadsheetNumberSql(e: string, variant: "sheets" | "excel"): { v: string; valid: string } {
-  return variant === "sheets" ? sheetsNumberSql(e) : excelNumberSql(e);
+  const n = variant === "sheets" ? sheetsNumberSql(e) : excelNumberSql(e);
+  const d = isoDateSerialSql(e);
+  // Excel's calendar is one day less than the real one before 1900-03-01.
+  const date = variant === "excel" ? `CASE WHEN ${d.v} < 61 THEN ${d.v} - 1 ELSE ${d.v} END` : d.v;
+  return { v: `CASE WHEN ${n.valid} THEN ${n.v} ELSE ${date} END`, valid: `(${n.valid} OR ${d.valid})` };
 }
 
 export const spreadsheetSemantics = (variant: "sheets" | "excel"): Semantics => ({
@@ -167,22 +194,18 @@ export const spreadsheetSemantics = (variant: "sheets" | "excel"): Semantics => 
       case "number": return { v: a.e, err: null };
       case "boolean": return { v: `CASE WHEN ${a.e} THEN 1::float8 ELSE 0::float8 END`, err: null };
       case "text":
+        if (typeof a.lit === "string") {
+          const iso = isoDateSerial(a.lit);
+          const n = variant === "sheets" && a.lit === "" ? 0 : ((variant === "sheets" ? sheetsNumber(a.lit) : excelNumber(a.lit)) ?? (iso === undefined ? undefined : fromRealSerial(iso, variant)));
+          return n === undefined ? { v: "NULL::float8", err: "'#VALUE!'" } : { v: sqlNumber(n), err: null };
+        }
+        const p = spreadsheetNumberSql(a.e, variant);
         if (variant === "sheets") {
-          if (typeof a.lit === "string") {
-            const n = a.lit === "" ? 0 : sheetsNumber(a.lit);
-            return n === undefined ? { v: "NULL::float8", err: "'#VALUE!'" } : { v: sqlNumber(n), err: null };
-          }
-          const p = sheetsNumberSql(a.e);
           return {
             v: `CASE WHEN ${a.e} = '' THEN 0::float8 WHEN ${p.valid} THEN ${p.v} END`,
             err: `CASE WHEN ${a.e} = '' OR ${p.valid} THEN NULL ELSE '#VALUE!' END`,
           };
         }
-        if (typeof a.lit === "string") {
-          const n = excelNumber(a.lit);
-          return n === undefined ? { v: "NULL::float8", err: "'#VALUE!'" } : { v: sqlNumber(n), err: null };
-        }
-        const p = excelNumberSql(a.e);
         return { v: `CASE WHEN ${p.valid} THEN ${p.v} END`, err: `CASE WHEN ${p.valid} THEN NULL ELSE '#VALUE!' END` };
     }
   },
@@ -333,8 +356,11 @@ export class SqlGen {
         span.end,
       );
     }
-    if (t !== "number" && t !== "text" && t !== "boolean") {
-      return this.fail("INVALID_OPTION", `fieldTypes["${name}"] must be "number", "text" or "boolean"`, span.start, span.end);
+    if (t !== "number" && t !== "text" && t !== "boolean" && t !== "date") {
+      return this.fail("INVALID_OPTION", `fieldTypes["${name}"] must be "number", "text", "boolean" or "date"`, span.start, span.end);
+    }
+    if (t === "date" && this.dialect === "airtable") {
+      return this.fail("INVALID_OPTION", `Date fields are not supported for Airtable yet (field "${name}")`, span.start, span.end);
     }
     return t;
   }
@@ -342,6 +368,12 @@ export class SqlGen {
   fieldRef(name: string): string {
     const alias = this.options.tableAlias ?? this.options.table;
     return alias ? `${quoteIdent(alias)}.${quoteIdent(name)}` : quoteIdent(name);
+  }
+
+  /** Serial of a date field (timestamp column) in the program's calendar: Excel is one day less before 1900-03-01. */
+  dateFieldSerial(ts: string): string {
+    const real = sqlTimestampSerial(ts);
+    return this.dialect === "excel" ? `CASE WHEN ${real} < 61 THEN ${real} - 1 ELSE ${real} END` : real;
   }
 
   /** A column of the row inside a columnQuery() subquery. */
@@ -355,8 +387,9 @@ export class SqlGen {
     if (!table) {
       return this.fail("INVALID_OPTION", `Whole-column ranges need the SQL table name: pass the table option`, span.start, span.end);
     }
-    const type = this.fieldType(name, span);
-    const col = this.innerColumn(name);
+    const raw = this.fieldType(name, span);
+    // Date columns take part as serial numbers.
+    const [col, type]: [string, FieldType] = raw === "date" ? [this.dateFieldSerial(this.innerColumn(name)), "number"] : [this.innerColumn(name), raw];
     const w = where ? ` WHERE ${where(col, type)}` : "";
     return `(SELECT ${select(col, type)} FROM ${quoteIdent(table)} AS ${INNER}${w})`;
   }
@@ -500,9 +533,11 @@ export class SqlGen {
           if (t === "text") return { v: `COALESCE(${ref}, '')`, t, err: null, nullable: false };
           if (t === "boolean") return { v: `NULLIF(${ref}, FALSE)`, t, err: null, nullable: true };
         }
+        if (t === "date") return { v: this.dateFieldSerial(ref), t: "number", err: null, nullable: true };
         return { v: ref, t, err: null, nullable: true };
       }
       case "column":
+      case "table":
         return this.fail("INVALID_ARGUMENT", "Whole-column range used outside an aggregate function", n.start, n.end);
       case "unary": {
         const x = this.expr(n.operand);

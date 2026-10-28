@@ -8,7 +8,9 @@ import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { FieldType } from "../core/types";
 import type { JsGen } from "../codegen/js";
-import { errorIf, quoteText, spreadsheetNumberSql, sqlNumber, type SqlGen, type SqlVal } from "../codegen/sql";
+import { errorIf, quoteText, spreadsheetNumberSql, sqlNumber, sqlTimestampSerial, type SqlGen, type SqlVal } from "../codegen/sql";
+import { registerSpreadsheetDates } from "./spreadsheet-dates";
+import { registerSpreadsheetLookups } from "./spreadsheet-lookups";
 import { NUMERIC_TEXT_SQL, type RoundMode } from "../runtime/common";
 import { parseCriterion, type Criterion, type SpreadsheetVariant } from "../runtime/spreadsheet";
 import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, roundDigits, roundSql, sqlArgs, substituteNthSql, textSql } from "./shared";
@@ -36,8 +38,15 @@ type AggArg =
 
 function aggArgs(c: BoundCall, g: SqlGen): AggArg[] {
   return c.args.map((a): AggArg => {
-    if (a.kind === "column") return { kind: "column", node: a, type: g.fieldType(a.name, a) };
-    if (a.kind === "field") return { kind: "ref", v: g.fieldRef(a.name), type: g.fieldType(a.name, a) };
+    if (a.kind === "column") {
+      const t = g.fieldType(a.name, a);
+      return { kind: "column", node: a, type: t === "date" ? "number" : t };
+    }
+    if (a.kind === "field") {
+      const t = g.fieldType(a.name, a);
+      // Date fields take part as serial numbers.
+      return t === "date" ? { kind: "ref", v: g.dateFieldSerial(g.fieldRef(a.name)), type: "number" } : { kind: "ref", v: g.fieldRef(a.name), type: t };
+    }
     return { kind: "value", val: g.expr(a) };
   });
 }
@@ -121,7 +130,7 @@ export function criterionSql(col: string, type: FieldType, crit: Criterion, vari
 }
 
 /** Same as likePattern(), computed by PostgreSQL for a text expression. */
-function likePatternSql(x: string): string {
+export function likePatternSql(x: string): string {
   const p1 = `replace(replace(replace(${x}, '~~', chr(3)), '~*', chr(1)), '~?', chr(2))`;
   const p2 = `replace(replace(replace(${p1}, ${quoteText("\\")}, ${quoteText("\\\\")}), '%', ${quoteText("\\%")}), '_', ${quoteText("\\_")})`;
   const p3 = `replace(replace(${p2}, '*', '%'), '?', '_')`;
@@ -481,10 +490,12 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
       const range = c.args[0] as BoundNode & { kind: "column" };
       const sumRange = (c.args[2] ?? range) as BoundNode & { kind: "column" };
       const crit = criterionOf(g, c.args[1]!);
-      const rangeType = g.fieldType(range.name, range);
+      const rawRangeType = g.fieldType(range.name, range);
+      const rangeType = rawRangeType === "date" ? "number" : rawRangeType;
       const sumType = g.fieldType(sumRange.name, sumRange);
-      if (sumType !== "number") return g.make("number", "0::float8", [crit.err]);
-      const select = () => `COALESCE(SUM(${g.innerColumn(sumRange.name)}), 0::float8)`;
+      if (sumType !== "number" && sumType !== "date") return g.make("number", "0::float8", [crit.err]);
+      const sumCol = sumType === "date" ? g.dateFieldSerial(g.innerColumn(sumRange.name)) : g.innerColumn(sumRange.name);
+      const select = () => `COALESCE(SUM(${sumCol}), 0::float8)`;
       return g.make("number", g.columnQuery(range.name, range, select, (col) => crit.where(col, rangeType)), [crit.err]);
     },
   });
@@ -626,9 +637,11 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
     },
   });
 
-  registry.markUnsupported(variant, DATE_FUNCTIONS, "date and time functions are planned");
+  registerSpreadsheetDates(variant);
+  registerSpreadsheetLookups(variant);
+  registry.markUnsupported(variant, DATE_FUNCTIONS.filter((n) => registry.lookup(variant, n).status !== "ok"), "not implemented yet");
   registry.markUnsupported(variant, [
-    "VLOOKUP", "HLOOKUP", "XLOOKUP", "LOOKUP", "INDEX", "MATCH", "XMATCH", "OFFSET", "INDIRECT", "CHOOSE",
+    "HLOOKUP", "LOOKUP", "XMATCH", "OFFSET", "INDIRECT", "CHOOSE",
     "FILTER", "SORT", "SORTBY", "UNIQUE", "ROW", "COLUMN", "ROWS", "COLUMNS",
   ], "lookup and reference functions are planned");
   registry.markUnsupported(variant, ["ARRAYFORMULA", "LAMBDA", "LET", "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "SEQUENCE"], "array formulas and LAMBDA are planned");

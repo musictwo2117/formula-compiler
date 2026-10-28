@@ -1,3 +1,5 @@
+import { msToSerial, wallClockMs } from "./dates";
+
 /** A spreadsheet/Airtable error value such as #DIV/0!. Errors are values, not exceptions. */
 export class FormulaError {
   constructor(readonly code: string) {}
@@ -20,6 +22,8 @@ export interface RefArg {
 export interface EvalContext {
   /** All rows of the table, for whole-column ranges (A:A, Table1[col]). */
   rows?: readonly Record<string, unknown>[];
+  /** A fixed "now" for TODAY() / NOW(); defaults to the current time. */
+  now?: Date | string;
 }
 
 export function isError(x: unknown): x is FormulaError {
@@ -56,9 +60,19 @@ export function matchFieldName(name: string, known: Iterable<string>): string {
   return found ?? name;
 }
 
-export function column(ctx: EvalContext | undefined, field: string): RefArg {
+/** A Sheets/Excel date field as a serial number ("2024-01-15", "2024-01-15T10:30", a Date, or a serial). */
+export function dateField(raw: unknown, field: string): Value {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw === "number") return normalize(raw, field);
+  const ms = wallClockMs(raw);
+  if (ms === undefined) throw new TypeError(`Field "${field}" should be a date (YYYY-MM-DD[THH:MM[:SS]] or a Date), got ${JSON.stringify(raw)}`);
+  return msToSerial(ms);
+}
+
+export function column(ctx: EvalContext | undefined, field: string, type?: string): RefArg {
   if (!ctx?.rows) throw new TypeError(`The formula uses a whole-column range of "${field}"; pass ctx.rows`);
-  return { ref: true, values: ctx.rows.map((r) => normalize(r[field], field)) };
+  const read = type === "date" ? dateField : normalize;
+  return { ref: true, values: ctx.rows.map((r) => read(r[field], field)) };
 }
 
 /** Numeric text as accepted by the coercion rules (both JS and SQL use this pattern). */

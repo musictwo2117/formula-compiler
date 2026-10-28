@@ -78,6 +78,8 @@ export type BoundNode =
   | (Span & { kind: "field"; name: string })
   /** Every value of a field across all rows (whole-column range). */
   | (Span & { kind: "column"; name: string })
+  /** Several whole columns side by side (D:F), for lookups. */
+  | (Span & { kind: "table"; names: string[] })
   | (Span & { kind: "unary"; operator: "-" | "+"; operand: BoundNode })
   | (Span & { kind: "percent"; operand: BoundNode })
   | (Span & { kind: "binary"; operator: BinaryOperator; left: BoundNode; right: BoundNode })

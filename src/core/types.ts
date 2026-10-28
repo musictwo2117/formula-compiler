@@ -1,6 +1,6 @@
 export type Dialect = "airtable" | "sheets" | "excel";
 export type Target = "js" | "sql" | "ast";
-export type FieldType = "number" | "text" | "boolean";
+export type FieldType = "number" | "text" | "boolean" | "date";
 
 export const DIALECTS: readonly Dialect[] = ["airtable", "sheets", "excel"];
 
@@ -32,10 +32,16 @@ export interface CompileOptions {
   tableName?: string;
   /** Sheets/Excel: argument and decimal separators. */
   locale?: LocaleOptions;
-  /** SQL: type of every referenced field. */
+  /** Sheets/Excel: time zone for TODAY() / NOW() (IANA name, default "UTC"). */
+  timeZone?: string;
+  /** SQL: a fixed "now" for TODAY() / NOW() (otherwise the database clock). JS reads ctx.now. */
+  now?: Date | string;
+  /** SQL: type of every referenced field. Sheets/Excel "date" fields become serial numbers. */
   fieldTypes?: Record<string, FieldType>;
   /** SQL: table that whole-column ranges (A:A) aggregate over. */
   table?: string;
+  /** SQL: field that gives the row order (row 1, row 2, …) for lookups such as VLOOKUP and MATCH. */
+  orderBy?: string;
   /** SQL: alias of the outer row in your query, used to qualify field references. Defaults to `table`. */
   tableAlias?: string;
 }

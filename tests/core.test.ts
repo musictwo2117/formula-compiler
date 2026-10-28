@@ -54,17 +54,17 @@ describe("parser", () => {
 
 describe("errors", () => {
   it("carries code, position, function name and program name", () => {
-    const e = compileError(() => compile("=1 + VLOOKUP(B2, C:D, 2)", { from: "excel", to: "js" }));
+    const e = compileError(() => compile("=1 + OFFSET(B2, C:D, 2)", { from: "excel", to: "js" }));
     expect(e.code).toBe("UNSUPPORTED_FUNCTION");
-    expect(e.functionName).toBe("VLOOKUP");
+    expect(e.functionName).toBe("OFFSET");
     expect(e.dialect).toBe("excel");
-    expect([e.start, e.end]).toEqual([5, 12]);
-    expect(e.message).toMatch(/^\[Excel\] Function VLOOKUP is not supported yet/);
-    expect(e.pointer()).toBe("=1 + VLOOKUP(B2, C:D, 2)\n     ^^^^^^^");
+    expect([e.start, e.end]).toEqual([5, 11]);
+    expect(e.message).toMatch(/^\[Excel\] Function OFFSET is not supported yet/);
+    expect(e.pointer()).toBe("=1 + OFFSET(B2, C:D, 2)\n     ^^^^^^");
   });
 
   it("separates 'not supported yet' from 'not a function'", () => {
-    expect(compileError(() => compile("=XLOOKUP(1,2,3)", { from: "sheets", to: "js" })).code).toBe("UNSUPPORTED_FUNCTION");
+    expect(compileError(() => compile("=XMATCH(1,2,3)", { from: "sheets", to: "js" })).code).toBe("UNSUPPORTED_FUNCTION");
     const unknown = compileError(() => compile("=ISERRORX(1)", { from: "sheets", to: "js" }));
     expect(unknown.code).toBe("UNKNOWN_FUNCTION");
     expect(unknown.message).toContain("Google Sheets");

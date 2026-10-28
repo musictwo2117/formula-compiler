@@ -40,6 +40,6 @@ describe("cli", () => {
 
   it("rejects bad usage", () => {
     expect(cli("=1").code).toBe(2);
-    expect(cli("=1", "--from", "excel", "--types", "x=date").code).toBe(2);
+    expect(cli("=1", "--from", "excel", "--types", "x=datetime").code).toBe(2);
   });
 });

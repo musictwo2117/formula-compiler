@@ -46,8 +46,10 @@ compile(formula, { from: "airtable" | "sheets" | "excel", to: "js" | "sql" | "as
 | `sheetName` | Sheets, Excel | Name of the formula's sheet, so `Sheet1!B2` / `'ชีต ไทย'!B2` are accepted. |
 | `tableName` | Excel | Optional check for `Table1[...]` references. |
 | `locale` | Sheets, Excel | `{ argumentSeparator: ";", decimalSeparator: "," }` for `=ROUND(1,5;0)`. |
-| `fieldTypes` | SQL target | `{ income: "number", name: "text", ok: "boolean" }` — required for every referenced field. |
+| `fieldTypes` | SQL target | `{ income: "number", name: "text", ok: "boolean", due: "date" }` — required for every referenced field. Sheets/Excel `date` fields (`"2024-01-15"`, `"2024-01-15T10:30"` or a `Date`; a `timestamp` column in SQL) become serial numbers. |
 | `table` / `tableAlias` | SQL target | Table that whole-column ranges (`A:A`) aggregate over, and the alias of the outer row. |
+| `orderBy` | SQL target | Field that gives the row order (row 1, row 2, …) for `VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX`. JS uses the order of `ctx.rows`. |
+| `timeZone` / `now` | Sheets, Excel | Time zone for `TODAY()` / `NOW()` (IANA name, default `"UTC"`), and a fixed "now" for SQL (JS reads `ctx.now`). |
 
 ### JavaScript
 
@@ -115,14 +117,14 @@ compile("=[@amount] / SUM(Table1[amount])", { from: "excel", to: "sql", fieldTyp
 
 ```ts
 try {
-  compile("=1 + VLOOKUP(B2, C:D, 2)", { from: "excel", to: "js" });
+  compile("=1 + OFFSET(B2, C:D, 2)", { from: "excel", to: "js" });
 } catch (e) {
   e.code;          // "UNSUPPORTED_FUNCTION"  (vs "UNKNOWN_FUNCTION" for names that are not functions)
-  e.functionName;  // "VLOOKUP"
+  e.functionName;  // "OFFSET"
   e.dialect;       // "excel"
-  e.start, e.end;  // 5, 12
-  e.message;       // "[Excel] Function VLOOKUP is not supported yet (lookup and reference functions are planned) (at position 6-12)"
-  e.pointer();     // "=1 + VLOOKUP(B2, C:D, 2)\n     ^^^^^^^"
+  e.start, e.end;  // 5, 11
+  e.message;       // "[Excel] Function OFFSET is not supported yet (lookup and reference functions are planned) (at position 6-11)"
+  e.pointer();     // "=1 + OFFSET(B2, C:D, 2)\n     ^^^^^^"
 }
 ```
 
@@ -138,7 +140,7 @@ npx @musictwo2117/formula-compiler "=IF(B2>30000, \"ok\", \"no\")" --from excel 
 npx @musictwo2117/formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to js --eval '{"Age": 30}'
 ```
 
-`--columns B=income,C=age` maps columns; add `:number` / `:text` / `:boolean` (or `--types income=number`)
+`--columns B=income,C=age` maps columns; add `:number` / `:text` / `:boolean` / `:date` (or `--types income=number`)
 for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, `--header-row`, `--current-row`,
 `--separator ";"`, `--decimal ","`, `--json`. Run `--help` for details.
 
@@ -156,13 +158,21 @@ for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, 
 | `COUNT` | ⏳ | ✅ | ✅ |
 | `COUNTA` | ⏳ | ✅ | ✅ |
 | `COUNTIF` | — | ✅ | ✅ |
+| `DATE` | ⏳ | ✅ | ✅ |
+| `DATEDIF` | ⏳ | ✅ | ✅ |
+| `DAY` | ⏳ | ✅ | ✅ |
+| `DAYS` | ⏳ | ✅ | ✅ |
+| `EDATE` | ⏳ | ✅ | ✅ |
+| `EOMONTH` | ⏳ | ✅ | ✅ |
 | `ERROR` | ✅ | — | — |
 | `FALSE` | ✅ | ✅ | ✅ |
 | `FIND` | ✅ | ✅ | ✅ |
+| `HOUR` | ⏳ | ✅ | ✅ |
 | `IF` | ✅ | ✅ | ✅ |
 | `IFERROR` | — | ✅ | ✅ |
 | `IFNA` | — | ✅ | ✅ |
 | `IFS` | — | ✅ | ✅ |
+| `INDEX` | — | ✅ | ✅ |
 | `INT` | ✅ | ✅ | ✅ |
 | `ISBLANK` | — | ✅ | ✅ |
 | `ISERROR` | ✅ | ⏳ | ⏳ |
@@ -171,11 +181,15 @@ for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, 
 | `LEFT` | ✅ | ✅ | ✅ |
 | `LEN` | ✅ | ✅ | ✅ |
 | `LOWER` | ✅ | ✅ | ✅ |
+| `MATCH` | — | ✅ | ✅ |
 | `MAX` | ✅ | ✅ | ✅ |
 | `MID` | ✅ | ✅ | ✅ |
 | `MIN` | ✅ | ✅ | ✅ |
+| `MINUTE` | ⏳ | ✅ | ✅ |
 | `MOD` | ✅ | ✅ | ✅ |
+| `MONTH` | ⏳ | ✅ | ✅ |
 | `NOT` | ✅ | ✅ | ✅ |
+| `NOW` | ⏳ | ✅ | ✅ |
 | `OR` | ✅ | ✅ | ✅ |
 | `REPLACE` | ✅ | ✅ | ✅ |
 | `RIGHT` | ✅ | ✅ | ✅ |
@@ -183,16 +197,23 @@ for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, 
 | `ROUNDDOWN` | ✅ | ✅ | ✅ |
 | `ROUNDUP` | ✅ | ✅ | ✅ |
 | `SEARCH` | ✅ | ✅ | ✅ |
+| `SECOND` | ⏳ | ✅ | ✅ |
 | `SUBSTITUTE` | ✅ | ✅ | ✅ |
 | `SUM` | ✅ | ✅ | ✅ |
 | `SUMIF` | — | ✅ | ✅ |
 | `SWITCH` | ✅ | ✅ | ✅ |
 | `T` | ✅ | ⏳ | ⏳ |
 | `TEXTJOIN` | — | ✅ | ✅ |
+| `TIME` | ⏳ | ✅ | ✅ |
+| `TODAY` | ⏳ | ✅ | ✅ |
 | `TRIM` | ✅ | ✅ | ✅ |
 | `TRUE` | ✅ | ✅ | ✅ |
 | `UPPER` | ✅ | ✅ | ✅ |
 | `VALUE` | ✅ | ✅ | ✅ |
+| `VLOOKUP` | — | ✅ | ✅ |
+| `WEEKDAY` | ⏳ | ✅ | ✅ |
+| `XLOOKUP` | — | ✅ | ✅ |
+| `YEAR` | ⏳ | ✅ | ✅ |
 
 Per-program differences (for example `IF` without a third argument is blank in Airtable but `FALSE` in
 Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
@@ -203,11 +224,15 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - **Every rule was checked against the real programs** (Airtable, Google Sheets and Excel for the web,
   2026-10-28). See [docs/behavior-notes.md](docs/behavior-notes.md).
 - Airtable: the JS target needs `fieldTypes` to tell an empty text field from an empty number field.
-- References: only cells in the formula's own row, and whole columns (`A:A`, `Table1[col]`) inside `SUM`,
-  `AVERAGE`, `COUNT`, `COUNTA`, `MIN`, `MAX`, `COUNTIF`, `SUMIF`. Bounded ranges (`A2:A10`), other rows,
-  other sheets, whole rows and multi-column ranges are rejected with `UNSUPPORTED_REFERENCE`.
-- Not yet: date/time functions, `VLOOKUP`/`XLOOKUP`/`INDEX`/`MATCH`, `ARRAYFORMULA`, `LAMBDA`, array literals,
-  named ranges, omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields.
+- References: only cells in the formula's own row, and whole columns (`A:A`, `Table1[col]`) inside aggregates
+  and lookups (multi-column `D:F` only as the `VLOOKUP` / `INDEX` table). Bounded ranges (`A2:A10`), other rows,
+  other sheets and whole rows are rejected with `UNSUPPORTED_REFERENCE`. Whole columns hold the data rows only:
+  the header row reads as empty (`INDEX(B:B, 1)` is blank, not the header text).
+- Dates: Sheets/Excel serial dates and 15 date functions; Airtable dates, `NETWORKDAYS`/`WORKDAY`, `WEEKNUM`,
+  `DATEVALUE`, `TEXT` and `DATEDIF` units `"MD"`/`"YD"` are not supported yet.
+- Not yet: `HLOOKUP`/`LOOKUP`/`XMATCH`/`OFFSET`, `ARRAYFORMULA`, `LAMBDA`, array literals, named ranges,
+  omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields.
+- SQL lookups need the `orderBy` option, and their match mode, column index and search mode must be literals.
 - SQL: literal `COUNTIF`/`SUMIF` criteria (`">5"`, `"a*"`) compile to plain SQL; computed ones (`">"&C2`)
   are parsed per row by PostgreSQL, which gives a much longer expression. Very large numbers can overflow `double precision` and raise a PostgreSQL error. The SQL repeats
   sub-expressions, so it grows quickly with deep nesting of error-producing expressions.

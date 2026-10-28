@@ -6,7 +6,7 @@
  */
 import type { BoundCall, BoundNode } from "../core/ast";
 import { registry } from "../core/registry";
-import type { Dialect, FieldType } from "../core/types";
+import type { CompileOptions, Dialect, FieldType } from "../core/types";
 import { matchFieldName } from "../runtime/common";
 
 export function jsString(s: string): string {
@@ -17,10 +17,16 @@ export function jsString(s: string): string {
 const BINARY: Record<string, string> = { "+": "add", "-": "sub", "*": "mul", "/": "div", "^": "pow", "&": "concat" };
 
 export class JsGen {
+  readonly fieldTypes: Record<string, FieldType>;
+  readonly timeZone: string;
+
   constructor(
     readonly dialect: Dialect,
-    readonly fieldTypes: Record<string, FieldType> = {},
-  ) {}
+    readonly options: Pick<CompileOptions, "fieldTypes" | "timeZone" | "headerRow"> = {},
+  ) {
+    this.fieldTypes = options.fieldTypes ?? {};
+    this.timeZone = options.timeZone ?? "UTC";
+  }
 
   expr(n: BoundNode): string {
     switch (n.kind) {
@@ -41,9 +47,13 @@ export class JsGen {
           const type = this.fieldTypes[name];
           return type ? `rt.f(${key}, ${jsString(name)}, ${jsString(type)})` : `rt.v(${key}, ${jsString(name)})`;
         }
+        if (this.fieldTypes[n.name] === "date") return `rt.date(record[${jsString(n.name)}], ${jsString(n.name)})`;
         return `rt.v(record[${jsString(n.name)}], ${jsString(n.name)})`;
       }
+      case "table":
+        return `rt.table(ctx, [${n.names.map(jsString).join(", ")}], [${n.names.map((name) => (this.fieldTypes[name] ? jsString(this.fieldTypes[name]!) : "undefined")).join(", ")}])`;
       case "column":
+        if (this.fieldTypes[n.name] === "date") return `rt.col(ctx, ${jsString(n.name)}, "date")`;
         return `rt.col(ctx, ${jsString(n.name)})`;
       case "unary":
         return `rt.${n.operator === "-" ? "neg" : "pos"}(${this.expr(n.operand)})`;
@@ -83,8 +93,8 @@ export function eagerJs(call: BoundCall, g: JsGen): string {
   return g.call(call.name, call.args.map((a) => g.expr(a)));
 }
 
-export function generateJs(root: BoundNode, dialect: Dialect, fieldTypes?: Record<string, FieldType>): string {
-  let body = new JsGen(dialect, fieldTypes).expr(root);
+export function generateJs(root: BoundNode, dialect: Dialect, options: Pick<CompileOptions, "fieldTypes" | "timeZone" | "headerRow"> = {}): string {
+  let body = new JsGen(dialect, options).expr(root);
   if (isTopLevelSearch(root, dialect)) body = `rt.searchResult(${body})`;
   return `(record, rt, ctx) => rt.result(${body})`;
 }

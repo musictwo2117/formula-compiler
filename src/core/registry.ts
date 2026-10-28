@@ -15,6 +15,8 @@ export interface FunctionSpec {
   maxArgs: number;
   /** Argument positions that may be whole-column ranges (A:A, Table1[col]). */
   columnArgs?: "all" | readonly number[];
+  /** Argument positions that may be multi-column whole ranges (D:F), e.g. the VLOOKUP table. */
+  tableArgs?: readonly number[];
   /** Argument positions that must be whole-column ranges. */
   requiredColumnArgs?: readonly number[];
   /** Extra checks on the bound arguments (e.g. IFS needs pairs). */

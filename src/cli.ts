@@ -24,7 +24,7 @@ Examples:
   formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to js --eval '{"Age": 30}'
 `;
 
-const FIELD_TYPES: readonly FieldType[] = ["number", "text", "boolean"];
+const FIELD_TYPES: readonly FieldType[] = ["number", "text", "boolean", "date"];
 
 function parsePairs(s: string, flag: string): [string, string][] {
   return s.split(",").filter(Boolean).map((pair) => {
@@ -35,7 +35,7 @@ function parsePairs(s: string, flag: string): [string, string][] {
 }
 
 function fieldType(t: string, flag: string): FieldType {
-  if (!FIELD_TYPES.includes(t as FieldType)) throw new UsageError(`${flag}: type must be number, text or boolean (got "${t}")`);
+  if (!FIELD_TYPES.includes(t as FieldType)) throw new UsageError(`${flag}: type must be number, text, boolean or date (got "${t}")`);
   return t as FieldType;
 }
 

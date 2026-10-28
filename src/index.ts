@@ -104,7 +104,7 @@ export function compile(formula: string, options: CompileOptions): CompileResult
   const dialect = options.from;
   if (options.to === "ast") return { target: "ast", dialect, ast };
   if (options.to === "js") {
-    const code = generateJs(bound, dialect, options.fieldTypes);
+    const code = generateJs(bound, dialect, options);
     const fn = new Function(`return ${code}`)() as (r: unknown, rt: unknown, ctx: unknown) => Value;
     const rt = runtimeFor(dialect);
     return { target: "js", dialect, code, evaluate: (record, ctx) => fn(record ?? {}, rt, ctx ?? {}) };

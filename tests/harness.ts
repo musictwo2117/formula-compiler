@@ -18,6 +18,8 @@ export interface TestCase {
   columnMap?: Record<string, string>;
   types?: Record<string, FieldType>;
   options?: Partial<CompileOptions>;
+  /** Fixed "now" for TODAY()/NOW(), given to both JS (ctx.now) and SQL (options.now). */
+  now?: string;
   expected?: unknown;
   error?: { code: string; functionName?: string; start?: number; end?: number };
   /** Behaviour we could not confirm against the real program: not run. */
@@ -28,7 +30,7 @@ export interface TestCase {
   sqlUnsupported?: string;
 }
 
-const pgType: Record<FieldType, string> = { number: "double precision", text: "text", boolean: "boolean" };
+const pgType: Record<FieldType, string> = { number: "double precision", text: "text", boolean: "boolean", date: "timestamp" };
 
 function inferTypes(rows: Record<string, unknown>[], explicit: Record<string, FieldType> = {}): Record<string, FieldType> {
   const out: Record<string, FieldType> = { ...explicit };
@@ -82,6 +84,7 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
       const table = `ตาราง ทดสอบ ${i}`;
       const base: Omit<CompileOptions, "to"> = { from: dialect, fieldTypes, table, ...c.options };
       if (c.columnMap) base.columnMap = c.columnMap;
+      if (c.now) base.now = c.now;
 
       if (c.error) {
         const want = c.error;
@@ -107,7 +110,7 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
 
       it(`${c.unverified ? "[unverified] " : ""}${name}`, async () => {
         const js = compile(c.formula, { ...base, to: "js" });
-        const jsValue = normalize(js.evaluate(current, { rows }));
+        const jsValue = normalize(js.evaluate(current, c.now ? { rows, now: c.now } : { rows }));
         expect(jsValue, "JS result").toEqual(c.expected);
 
         if (c.sqlUnsupported) {

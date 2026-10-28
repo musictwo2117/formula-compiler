@@ -117,6 +117,24 @@ Airtable behaves much like JavaScript.
   numbers; `""` matches empty cells; an empty criterion **cell** matches nothing; wildcards and case
   rules as in `SEARCH`.
 
+### Dates and lookups (Google Sheets)
+
+- Dates are serial numbers: days since 1899-12-30, time of day as the fraction (`DATE(2024,1,15)` = 45306).
+- `DATE` lets months and days overflow (`DATE(2024,14,1)` = 2025-02-01, `DATE(2024,3,0)` = Feb 29) and adds
+  1900 to years 0-1899 (`DATE(99,1,1)` = 1999, `DATE(1899,12,31)` = 3799-12-31); years below 0 or from
+  10000 are `#NUM!`. `DATE(1900,1,1)` = 2; serial 0 is 1899-12-30.
+- Date text in ISO form is a date (`YEAR("2024-01-15")` = 2024); impossible dates (`"2024-02-30"`) are not.
+- `EDATE` / `EOMONTH` clamp to the month's end; `WEEKDAY` types 1, 2, 3 and 11-17; `HOUR` / `MINUTE` /
+  `SECOND` round to the nearest second; `DATEDIF` with `"D"`, `"M"`, `"Y"`, `"YM"`.
+- `TODAY()` / `NOW()` use the `timeZone` option (default UTC).
+- `VLOOKUP` exact match (`FALSE`) ignores case and takes `*` `?` `~` wildcards; the first matching row wins.
+  Approximate match (the default) returns the last of the largest keys <= the search key. Numbers never match
+  text (`VLOOKUP("10", …)` finds nothing). A column past the table is `#REF!`; nothing found is `#N/A`.
+- `XLOOKUP` match mode 0 is exact **without** wildcards, 2 is wildcards, -1 / 1 are exact-or-next-smaller /
+  larger; search mode -1 searches from the last row. `if_not_found` replaces `#N/A`.
+- `MATCH` positions count from row 1 of the sheet (with the header in row 1, the first data row is 2);
+  types 0, 1 (largest <=, last of equals) and -1. `INDEX` beyond the data is blank.
+
 ## Excel (checked in Excel for the web)
 
 - Same as Sheets except where listed here.
@@ -139,3 +157,15 @@ Airtable behaves much like JavaScript.
   numbers (as in Sheets). **An empty criterion cell means 0** (it counts zeros, not empty cells).
 - Structured references: `[@col]`, `[@[col with spaces]]`, `Table1[@col]`, `Table1[[#This Row],[col]]`, and
   `Table1[col]` / `[col]` as whole columns inside aggregates. `'` escapes `[ ] # '` inside names.
+
+### Dates and lookups (Excel)
+
+- Same as Sheets except **Excel's 1900 calendar**: Excel keeps Lotus 1-2-3's bug and has a 1900-02-29
+  (serial 60), so `DATE(1900,1,1)` = 1, `DATE(1900,2,29)` = 60, `DATE(1900,3,1)` = 61, and serial 0 is
+  "1900-01-00" (`DAY(0)` = 0, `MONTH(0)` = 1, `YEAR(0)` = 1900). Date fields and date text before
+  1900-03-01 get the same offset (`"1900-01-15"+0` = 15). `WEEKDAY` follows the serial (`WEEKDAY(1)` = 1).
+- `DATE` counts through the fake day (`DATE(1900,3,0)` = 60, `DATE(1900,2,30)` = 61), but `EDATE` / `EOMONTH`
+  use the real calendar (`EDATE(DATE(1900,1,31),1)` = 59, `EDATE(60,12)` = 1901-02-28) and give `#NUM!`
+  for results before serial 1.
+- Lookups behave like Sheets (all 25 lookup probes gave the same answers).
+
