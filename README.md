@@ -66,8 +66,10 @@ Errors come back as `FormulaError` values (`isError(v)`, `v.code === "#DIV/0!"`)
 Generated code for the Airtable example:
 
 ```js
-(record, rt, ctx) => rt.result(rt.IF(rt.AND(rt.cmp(">", rt.v(record["รายได้"], "รายได้"), 30000), rt.cmp("<", rt.v(record["อายุ"], "อายุ"), 60)), () => "ผ่าน", () => "ไม่ผ่าน"))
+(record, rt, ctx) => rt.result(rt.IF(rt.AND(rt.cmp(">", rt.v(record[rt.key(record, "รายได้")], "รายได้"), 30000), rt.cmp("<", rt.v(record[rt.key(record, "อายุ")], "อายุ"), 60)), () => "ผ่าน", () => "ไม่ผ่าน"))
 ```
+
+`rt.key` matches the field name without regard to case, as Airtable does.
 
 ### SQL (PostgreSQL)
 
@@ -89,7 +91,7 @@ NULL::text
 
 Blank is `NULL`. Numbers are `double precision`. When the branches of `IF`/`SWITCH`/`IFERROR` have different
 types (`IF(x, "yes", 0)`), the result is `jsonb`. Whole-column aggregates become subqueries:
-`=SUM(B:B)` → `(SELECT COALESCE(SUM("__fc_r"."x"), 0::float8) FROM "people" AS "__fc_r")`.
+`=SUM(B:B)` → `((SELECT COALESCE(SUM("__fc_r"."x"), 0::float8) FROM "people" AS "__fc_r"))`.
 
 ### Examples by program
 
@@ -111,6 +113,37 @@ compile("=B2/SUM(B:B)", { from: "sheets", to: "sql", columnMap: { B: "x" }, fiel
 ```ts
 compile("=IF([@รายได้] > 30000, \"ผ่าน\", \"ไม่ผ่าน\")", { from: "excel", to: "js" });
 compile("=[@amount] / SUM(Table1[amount])", { from: "excel", to: "sql", fieldTypes: { amount: "number" }, table: "orders" });
+```
+
+### Dates and lookups (Sheets, Excel)
+
+Dates are serial numbers, as in the spreadsheet (days since 1899-12-30, the time of day as the fraction).
+Give date fields the `date` type: ISO text or a `Date` in JS, a `timestamp` column in SQL.
+
+```ts
+const due = compile("=EDATE(B2, 1)", { from: "excel", to: "js", columnMap: { B: "start" }, fieldTypes: { start: "date" } });
+due.evaluate({ start: "2024-01-31" }); // 45351 (2024-02-29)
+
+const age = compile('=DATEDIF(B2, TODAY(), "Y")', {
+  from: "sheets", to: "js", columnMap: { B: "born" }, fieldTypes: { born: "date" }, timeZone: "Asia/Bangkok",
+});
+age.evaluate({ born: "1990-05-20" }, { now: "2026-10-28T09:00:00Z" }); // 36
+```
+
+Excel's 1900 calendar is followed too (it has a 1900-02-29, so `DATE(1900,1,1)` is 1 in Excel and 2 in Sheets).
+
+`VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX` work over whole columns. In JS they read `ctx.rows`; in SQL they read
+`table`, in the order of the `orderBy` field:
+
+```ts
+const rows = [{ sku: "A1", price: 10 }, { sku: "B2", price: 25 }];
+const price = compile('=VLOOKUP("b2", A:B, 2, FALSE)', { from: "excel", to: "js", columnMap: { A: "sku", B: "price" } });
+price.evaluate(rows[0], { rows }); // 25
+
+compile('=VLOOKUP("b2", A:B, 2, FALSE)', {
+  from: "excel", to: "sql", columnMap: { A: "sku", B: "price" },
+  fieldTypes: { sku: "text", price: "number" }, table: "products", orderBy: "id",
+});
 ```
 
 ### Errors
@@ -142,7 +175,8 @@ npx @musictwo2117/formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to 
 
 `--columns B=income,C=age` maps columns; add `:number` / `:text` / `:boolean` / `:date` (or `--types income=number`)
 for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, `--header-row`, `--current-row`,
-`--separator ";"`, `--decimal ","`, `--json`. Run `--help` for details.
+`--separator ";"`, `--decimal ","`, `--json`. Run `--help` for details. The CLI has no `orderBy`, `timeZone` or
+`now` flags yet; use the library for SQL lookups and for `TODAY()` / `NOW()` outside UTC.
 
 ## Supported functions
 
@@ -245,6 +279,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 
 ## Contributing
 
+Development needs Node 22.12 or later (Vitest 5); the published package still runs on Node 18+, which CI checks.
+
 ```bash
 npm install
 npm test          # Vitest: every case runs in JS and in PGlite (PostgreSQL 17)
@@ -262,6 +298,10 @@ npm run build
   could not confirm in the real program with `"unverified": "why"` (still runs, adds a todo) or `"todo": "why"`
   (does not run), and add it to `docs/behavior-notes.md`. Please do not guess.
 - Confirmations of unverified behaviour (screenshots or docs links) are very welcome.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
