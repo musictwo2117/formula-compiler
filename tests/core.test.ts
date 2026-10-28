@@ -199,3 +199,51 @@ describe("SQL lookups", () => {
     expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/Index (Only )?Scan using fruit_price_idx/);
   });
 });
+
+describe("SQL size of date functions", () => {
+  // Nested date functions used to repeat their arguments in every branch: EDATE(EDATE(A2,1),1) was
+  // 4.4 million characters for Excel. These limits keep the growth in check.
+  const size = (from: "excel" | "sheets", formula: string) => {
+    const out = compile(formula, { from, to: "sql", columnMap: { A: "d", B: "e" }, fieldTypes: { d: "number", e: "number" } });
+    return out.sql.length + out.errorSql.length;
+  };
+  const nested = (depth: number) => "=" + Array.from({ length: depth }).reduce<string>((f) => `EDATE(${f},1)`, "A2");
+
+  it.each(["excel", "sheets"] as const)("each %s date function on fields stays under 8,000 characters", (from) => {
+    for (const f of ["DATE(A2,B2,1)", "TIME(A2,B2,0)", "YEAR(A2)", "MONTH(A2)", "DAY(A2)", "HOUR(A2)", "MINUTE(A2)", "SECOND(A2)",
+      "WEEKDAY(A2,B2)", "EDATE(A2,B2)", "EOMONTH(A2,B2)", "DAYS(A2,B2)", "DATEDIF(A2,B2,\"M\")"]) {
+      expect(size(from, "=" + f), f).toBeLessThan(8_000);
+    }
+  });
+
+  it.each(["excel", "sheets"] as const)("nesting %s date functions does not multiply the SQL", (from) => {
+    expect(size(from, nested(2))).toBeLessThan(20_000);
+    expect(size(from, nested(8))).toBeLessThan(200_000);
+    // Doubling the depth may at most about quadruple the size (the error SQL re-checks each value).
+    expect(size(from, nested(8)) / size(from, nested(4))).toBeLessThan(4.5);
+    expect(size(from, "=DATEDIF(A2,EDATE(A2,12),\"M\")")).toBeLessThan(20_000);
+  });
+
+  it.each(["excel", "sheets"] as const)("runs deeply nested %s date SQL in PostgreSQL", async (from) => {
+    // Short SQL is not enough: if PostgreSQL flattened the bindings back, the plan itself would
+    // blow up (depth 3 ran out of memory before bindings got OFFSET 0).
+    const db = new PGlite();
+    try {
+      await db.exec(`CREATE TABLE "t" ("d" float8); INSERT INTO "t" VALUES (45000)`);
+      const formula = nested(8);
+      const js = compile(formula, { from, to: "js", columnMap: { A: "d" } }).evaluate({ d: 45000 });
+      const sql = compile(formula, { from, to: "sql", columnMap: { A: "d", B: "e" }, fieldTypes: { d: "number", e: "number" } });
+      const res = await db.query<{ v: number; e: string | null }>(`SELECT ${sql.sql} AS v, ${sql.errorSql} AS e FROM "t"`);
+      expect(res.rows[0]).toEqual({ v: js, e: null });
+      expect(js).toBe(45245);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("computes date calls with literal arguments at compile time", () => {
+    expect(compile("=EDATE(DATE(2024,1,31),1)", { from: "excel", to: "sql" }).sql).toBe("45351::float8");
+    expect(compile("=DATE(9999,12,32)", { from: "excel", to: "sql" }).errorSql).toBe("'#NUM!'");
+    expect(compile("=DATE(9999,12,32)", { from: "sheets", to: "sql" }).sql).toBe("2958466::float8");
+  });
+});

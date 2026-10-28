@@ -238,7 +238,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - Google Sheets dates after 99999-12-31 are `#NUM!` here; Sheets still gives a number.
 - SQL: literal `COUNTIF`/`SUMIF` criteria (`">5"`, `"a*"`) compile to plain SQL; computed ones (`">"&C2`)
   are parsed per row by PostgreSQL, which gives a much longer expression. Very large numbers can overflow `double precision` and raise a PostgreSQL error. The SQL repeats
-  sub-expressions, so it grows quickly with deep nesting of error-producing expressions.
+  sub-expressions, so it grows quickly with deep nesting of error-producing expressions (date functions compute
+  repeated values once, so they are not affected).
 - Strings are handled as code points; Sheets counts UTF-16 units, so `LEN` of an emoji matches Sheets but
   `LEFT`/`MID` on emoji can differ.
 

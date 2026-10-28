@@ -7,6 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compile, FormulaCompileError, isError, type CompileOptions, type Dialect, type FieldType } from "../src/index";
 import { quoteIdent } from "../src/codegen/sql";
+import { dateFolding } from "../src/dialects/spreadsheet-dates";
 
 export interface TestCase {
   name?: string;
@@ -49,6 +50,15 @@ function normalize(v: unknown): unknown {
   if (isError(v)) return { error: v.code };
   if (typeof v === "number" && !Number.isFinite(v)) return { specialValue: String(v) };
   return v;
+}
+
+function withoutDateFolding<T>(f: () => T): T {
+  dateFolding.enabled = false;
+  try {
+    return f();
+  } finally {
+    dateFolding.enabled = true;
+  }
 }
 
 function caseName(c: TestCase, i: number): string {
@@ -124,6 +134,8 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
         }
 
         const sql = compile(c.formula, { ...base, to: "sql" });
+        // Literal date calls are computed at compile time; also run the SQL they would otherwise be.
+        const unfolded = withoutDateFolding(() => compile(c.formula, { ...base, to: "sql" }));
         const cols = Object.entries(fieldTypes);
         const t = quoteIdent(table);
         await db.exec(`CREATE TABLE ${t} ("__id" int${cols.map(([k, ty]) => `, ${quoteIdent(k)} ${pgType[ty]}`).join("")})`);
@@ -133,12 +145,14 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
             const params = [idx, ...cols.map(([k]) => row[k] ?? null)];
             await db.query(`INSERT INTO ${t} (${names.map(quoteIdent).join(", ")}) VALUES (${params.map((_, j) => `$${j + 1}`).join(", ")})`, params);
           }
-          const res = await db.query<{ value: unknown; error: string | null }>(
-            `SELECT ${sql.sql} AS value, ${sql.errorSql} AS error FROM ${t} WHERE "__id" = ${c.row ?? 0}`,
-          );
-          const r = res.rows[0]!;
-          const sqlValue = r.error !== null ? { error: r.error } : normalize(r.value);
-          expect(sqlValue, `SQL result\n${sql.sql}\nerror: ${sql.errorSql}`).toEqual(jsValue);
+          for (const [label, q] of unfolded.sql === sql.sql ? [["SQL", sql] as const] : [["SQL", sql] as const, ["unfolded SQL", unfolded] as const]) {
+            const res = await db.query<{ value: unknown; error: string | null }>(
+              `SELECT ${q.sql} AS value, ${q.errorSql} AS error FROM ${t} WHERE "__id" = ${c.row ?? 0}`,
+            );
+            const r = res.rows[0]!;
+            const sqlValue = r.error !== null ? { error: r.error } : normalize(r.value);
+            expect(sqlValue, `${label} result\n${q.sql}\nerror: ${q.errorSql}`).toEqual(jsValue);
+          }
         } finally {
           await db.exec(`DROP TABLE ${t}`);
         }

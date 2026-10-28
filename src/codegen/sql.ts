@@ -314,8 +314,14 @@ export const airtableSemantics: Semantics = {
 
 const INNER = quoteIdent("__fc_r");
 
+/** SQL short enough to repeat: a number literal, NULL, or a (qualified) column reference. */
+/** Expressions up to this length are repeated rather than bound (see SqlGen.bind). */
+const BIND_MIN_LENGTH = 160;
+const SIMPLE_SQL = /^(?:-?[\d.e+-]+::float8|-?\d+|NULL|(?:"(?:[^"]|"")+"\.)?"(?:[^"]|"")+"|"__fc_b\d+"\.v\d+)$/;
+
 export class SqlGen {
   readonly sem: Semantics;
+  private bindings = 0;
 
   constructor(
     readonly dialect: Dialect,
@@ -343,6 +349,23 @@ export class SqlGen {
   }
   make(t: SqlType, v: string, errs: (string | null)[], nullable = false): SqlVal {
     return { v, t, err: coalesce(errs), nullable };
+  }
+
+  /**
+   * Evaluates each expression once and hands `body` short references to the results, so an
+   * expression the body uses several times is not repeated in the SQL (nesting would otherwise
+   * multiply its size). Short expressions are repeated instead: each binding is a subquery that
+   * PostgreSQL runs per row, which costs more than evaluating a few operators twice.
+   */
+  bind(exprs: string[], body: (...refs: string[]) => string): string {
+    const complex = exprs.map((e) => e.length > BIND_MIN_LENGTH && !SIMPLE_SQL.test(e));
+    if (!complex.includes(true)) return body(...exprs);
+    const alias = `"__fc_b${++this.bindings}"`;
+    const refs = exprs.map((e, i) => (complex[i] ? `${alias}.v${i}` : e));
+    const cols = exprs.flatMap((e, i) => (complex[i] ? [`${e} AS v${i}`] : []));
+    // OFFSET 0 keeps PostgreSQL from pulling the subquery up, which would substitute the
+    // expression back into every reference and bring the repetition back into the plan.
+    return `(SELECT ${body(...refs)} FROM (SELECT ${cols.join(", ")} OFFSET 0) AS ${alias})`;
   }
 
   // ---- references

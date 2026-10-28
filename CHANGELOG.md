@@ -3,6 +3,25 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## 0.2.2 — 2026-10-28
+
+### Fixed
+
+- **Date functions no longer produce huge SQL.** Each value a date function uses more than once is now
+  computed once (a small subquery) instead of being repeated, so nesting adds to the SQL instead of
+  multiplying it. Excel `EDATE(EDATE(A2,1),1)` went from 4.4 million characters to 16,000; eight levels of
+  `EDATE` are about 150,000.
+- **Date calls with literal arguments are computed at compile time**: `EDATE(DATE(2024,1,31),1)` compiles to
+  `45351::float8` (it was 440,000 characters).
+- **Date SQL runs faster**: on 100,000 rows `EDATE(A2,1)` takes 0.6 s instead of 3.0 s and
+  `DATEDIF(A2,EDATE(A2,13),"M")` 1.9 s instead of 11.6 s (PGlite).
+
+### Tests
+
+- Size limits for every date function and for nested ones, and an 8-deep `EDATE` run in PostgreSQL.
+- Every case's SQL also runs with compile-time folding turned off, so the SQL for literal arguments is
+  still checked.
+
 ## 0.2.1 — 2026-10-28
 
 ### Fixed
