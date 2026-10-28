@@ -144,3 +144,66 @@ function escapeRegex(s: string): string {
 }
 
 export const ASCII_SPACE_TRIM = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
+
+// ---------------------------------------------------------------- Airtable (JavaScript-like)
+
+/** Decimal / Infinity text as JavaScript's Number() reads it (hex and binary forms are not supported). */
+export const JS_NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+export const JS_NUMBER_TEXT_SQL = "^[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?$";
+
+/** JavaScript Number(text): "" and spaces → 0, "3" → 3, "a" → NaN. Airtable uses this for + - and numeric functions. */
+export function jsNumber(s: string): number {
+  const t = s.replace(/^\s+|\s+$/g, "");
+  if (t === "") return 0;
+  if (JS_NUMBER_TEXT.test(t)) return Number(t);
+  if (/^[+-]?Infinity$/.test(t)) return Number(t);
+  return NaN;
+}
+
+/**
+ * Airtable VALUE(): keeps only digits and ".", any "-" makes it negative,
+ * "%" divides by 100 (VALUE("$1,000") = 1000, VALUE("5-3") = -53, VALUE("abc") = 0).
+ */
+export function airtableValue(s: string): number {
+  const digits = s.replace(/[^0-9.]/g, "");
+  if (digits === "") return 0;
+  let n = /^\d*\.?\d*$/.test(digits) && digits !== "." ? Number(digits) : NaN;
+  if (s.includes("-")) n = -n;
+  if (s.includes("%")) n = n / 100;
+  return n;
+}
+
+// ---------------------------------------------------------------- Google Sheets
+
+/**
+ * Text Google Sheets reads as a number in arithmetic and VALUE(): optional
+ * sign or (parentheses), "$", thousands commas, decimals, trailing "%".
+ * No exponent ("1e3" is not a number). Checked against Sheets.
+ */
+export const SHEETS_NUMBER_TEXT = /^\s*(\()?([+-])?\$?([+-])?((\d{1,3}(,\d{3})+|\d+)(\.\d*)?|\.\d+)(%)?(\))?\s*$/;
+export const SHEETS_NUMBER_TEXT_SQL = "^\\s*(\\()?([+-])?\\$?([+-])?((\\d{1,3}(,\\d{3})+|\\d+)(\\.\\d*)?|\\.\\d+)(%)?(\\))?\\s*$";
+
+export function sheetsNumber(s: string): number | undefined {
+  const m = SHEETS_NUMBER_TEXT.exec(s);
+  if (!m || Boolean(m[1]) !== Boolean(m[9]) || (m[2] && m[3])) return undefined;
+  let n = Number(m[4]!.replace(/,/g, ""));
+  if (m[1] || m[2] === "-" || m[3] === "-") n = -n;
+  if (m[8]) n = n / 100;
+  return n;
+}
+
+/** Number literals in Sheets/Excel formulas keep 15 significant digits (the rest become 0). */
+export function truncateTo15Digits(text: string): string {
+  const [mant, exp] = text.toLowerCase().split("e") as [string, string | undefined];
+  let seen = 0;
+  let started = false;
+  let out = "";
+  for (const c of mant) {
+    if (c >= "0" && c <= "9") {
+      if (c !== "0") started = true;
+      if (started) seen++;
+      out += started && seen > 15 ? "0" : c;
+    } else out += c;
+  }
+  return exp === undefined ? out : `${out}e${exp}`;
+}

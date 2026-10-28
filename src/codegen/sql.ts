@@ -13,7 +13,7 @@ import type { BinaryOperator, BoundCall, BoundNode, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { CompileOptions, Dialect, FieldType } from "../core/types";
-import { NUMERIC_TEXT, NUMERIC_TEXT_SQL } from "../runtime/common";
+import { JS_NUMBER_TEXT_SQL, NUMERIC_TEXT, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, jsNumber, sheetsNumber } from "../runtime/common";
 
 export type SqlType = "number" | "text" | "boolean" | "blank" | "any";
 
@@ -94,15 +94,16 @@ export function errorIf(cond: string, code: string): string {
 
 /** Per-program coercion and comparison rules. Mirrors src/runtime/*.ts. */
 export interface Semantics {
-  /** Error produced by invalid arithmetic (text that is not a number, ...). */
-  valueError: string;
-  divZeroError: string;
   /** Airtable treats '' like blank. */
   emptyTextIsBlank: boolean;
+  /** Airtable: text (even empty) in * and / is #ERROR!. */
+  strictMulDiv: boolean;
+  /** Division by zero: an error code, or IEEE Infinity/NaN (Airtable). */
+  divZero: "ieee" | string;
   toNumber(a: KindArm): Part;
   toText(a: KindArm): Part;
   toBool(a: KindArm): Part;
-  /** SQL boolean comparing two non-blank arms. */
+  /** SQL boolean comparing two non-blank arms of the same kind. */
   compareSame(op: BinaryOperator, a: KindArm, b: KindArm): string;
   /** SQL boolean comparing two non-blank arms of different kinds. */
   compareMixed(op: BinaryOperator, a: KindArm, b: KindArm): string;
@@ -117,16 +118,51 @@ function opResult(op: BinaryOperator, c: number): string {
 
 const RANK: Record<Kind, number> = { blank: 0, number: 1, text: 2, boolean: 3 };
 
-export const spreadsheetSemantics: Semantics = {
-  valueError: "#VALUE!",
-  divZeroError: "#DIV/0!",
+/** A double literal, including Infinity and NaN. */
+export function sqlFloat(n: number): string {
+  if (Number.isNaN(n)) return "'NaN'::float8";
+  if (n === Infinity) return "'Infinity'::float8";
+  if (n === -Infinity) return "'-Infinity'::float8";
+  return sqlNumber(n);
+}
+
+/** Google Sheets text → number (see sheetsNumber()); value and validity as SQL. */
+export function sheetsNumberSql(e: string): { v: string; valid: string } {
+  const valid = `(${e} ~ ${quoteText(SHEETS_NUMBER_TEXT_SQL)} AND (${e} ~ '\\(') = (${e} ~ '\\)') AND ${e} !~ '[+-].*[+-]')`;
+  const digits = `regexp_replace(${e}, '[^0-9.]', '', 'g')::float8`;
+  const v = `(${digits} * CASE WHEN ${e} ~ '[-(]' THEN -1 ELSE 1 END / CASE WHEN ${e} ~ '%' THEN 100 ELSE 1 END)`;
+  return { v, valid };
+}
+
+/** Number → text: 15 significant digits; Sheets switches to 1E+21 / 1E-11 outside [1e-10, 1e21). */
+function spreadsheetNumberText(e: string, variant: "sheets" | "excel"): string {
+  const plain = `trim_scale((${e})::numeric)::text`;
+  if (variant === "excel") return plain;
+  const sci = `upper(regexp_replace(btrim(to_char(${e}, '9.99999999999999EEEE')), '\\.?0*e', 'e'))`;
+  return `CASE WHEN ${e} = 0 THEN '0' WHEN abs(${e}) >= 1e21 OR abs(${e}) < 1e-10 THEN ${sci} ELSE ${plain} END`;
+}
+
+export const spreadsheetSemantics = (variant: "sheets" | "excel"): Semantics => ({
   emptyTextIsBlank: false,
+  strictMulDiv: false,
+  divZero: "#DIV/0!",
   toNumber(a) {
     switch (a.k) {
       case "blank": return { v: "0::float8", err: null };
       case "number": return { v: a.e, err: null };
       case "boolean": return { v: `CASE WHEN ${a.e} THEN 1::float8 ELSE 0::float8 END`, err: null };
       case "text":
+        if (variant === "sheets") {
+          if (typeof a.lit === "string") {
+            const n = a.lit === "" ? 0 : sheetsNumber(a.lit);
+            return n === undefined ? { v: "NULL::float8", err: "'#VALUE!'" } : { v: sqlNumber(n), err: null };
+          }
+          const p = sheetsNumberSql(a.e);
+          return {
+            v: `CASE WHEN ${a.e} = '' THEN 0::float8 WHEN ${p.valid} THEN ${p.v} END`,
+            err: `CASE WHEN ${a.e} = '' OR ${p.valid} THEN NULL ELSE '#VALUE!' END`,
+          };
+        }
         if (typeof a.lit === "string") {
           return NUMERIC_TEXT.test(a.lit) ? { v: sqlNumber(Number(a.lit.trim())), err: null } : { v: "NULL::float8", err: "'#VALUE!'" };
         }
@@ -138,7 +174,7 @@ export const spreadsheetSemantics: Semantics = {
       case "blank": return { v: "''", err: null };
       case "text": return { v: a.e, err: null };
       case "boolean": return { v: `CASE WHEN ${a.e} THEN 'TRUE' ELSE 'FALSE' END`, err: null };
-      case "number": return { v: `trim_scale((${a.e})::numeric)::text`, err: null };
+      case "number": return { v: spreadsheetNumberText(a.e, variant), err: null };
     }
   },
   toBool(a) {
@@ -166,25 +202,46 @@ export const spreadsheetSemantics: Semantics = {
     // Different kinds never coerce: numbers < text < booleans.
     return opResult(op, RANK[a.k] - RANK[b.k]);
   },
-};
+});
+
+/** JavaScript Number(text) in SQL (see jsNumber()). */
+export function jsNumberSql(e: string): string {
+  const t = `regexp_replace(${e}, '^\\s+|\\s+$', '', 'g')`;
+  return `CASE WHEN ${t} = '' THEN 0::float8 WHEN ${t} ~ ${quoteText(JS_NUMBER_TEXT_SQL)} OR ${t} ~ '^[+-]?Infinity$' THEN (${t})::float8 ELSE 'NaN'::float8 END`;
+}
+
+/** A float expression that cannot be NaN (a literal or a plain column), so comparisons need no NaN guard. */
+function surelyNotNaN(e: string): boolean {
+  return /^-?[0-9.]+(e[+-]?[0-9]+)?::float8$/.test(e) || /^(COALESCE\()?("[^"]*(?:""[^"]*)*"\.)?"[^"]*(?:""[^"]*)*"(, 0::float8\))?$/.test(e);
+}
+
+/** Numeric comparison with JavaScript NaN rules (every comparison with NaN is false except <>). */
+function jsNumericCompare(op: BinaryOperator, x: string, y: string): string {
+  const guards = [x, y].filter((e) => !surelyNotNaN(e)).map((e) => `${e} = 'NaN'::float8`);
+  if (guards.length === 0) return `(${x} ${op} ${y})`;
+  const anyNaN = guards.join(" OR ");
+  return op === "<>" ? `(${x} <> ${y} OR ${anyNaN})` : `(${x} ${op} ${y} AND NOT (${anyNaN}))`;
+}
 
 export const airtableSemantics: Semantics = {
-  valueError: "#ERROR!",
-  divZeroError: "#ERROR!",
   emptyTextIsBlank: true,
+  strictMulDiv: true,
+  divZero: "ieee",
   toNumber(a) {
     switch (a.k) {
       case "blank": return { v: "0::float8", err: null };
       case "number": return { v: a.e, err: null };
       case "boolean": return { v: `CASE WHEN ${a.e} THEN 1::float8 ELSE 0::float8 END`, err: null };
-      case "text": return { v: "NULL::float8", err: "'#ERROR!'" };
+      case "text":
+        if (typeof a.lit === "string") return { v: sqlFloat(jsNumber(a.lit)), err: null };
+        return { v: jsNumberSql(a.e), err: null };
     }
   },
   toText(a) {
     switch (a.k) {
       case "blank": return { v: "''", err: null };
       case "text": return { v: a.e, err: null };
-      case "boolean": return { v: `CASE WHEN ${a.e} THEN '1' ELSE '0' END`, err: null };
+      case "boolean": return { v: `CASE WHEN ${a.e} THEN 'TRUE' ELSE 'FALSE' END`, err: null };
       case "number":
         // Same text as JavaScript's String(n).
         return {
@@ -197,21 +254,19 @@ export const airtableSemantics: Semantics = {
     switch (a.k) {
       case "blank": return { v: "FALSE", err: null };
       case "boolean": return { v: a.e, err: null };
-      case "number": return { v: `(${a.e} <> 0)`, err: null };
+      case "number": return { v: surelyNotNaN(a.e) ? `(${a.e} <> 0)` : `(${a.e} <> 0 AND ${a.e} <> 'NaN'::float8)`, err: null };
       case "text": return { v: "TRUE", err: null };
     }
   },
   compareSame(op, a, b) {
     if (a.k === "text") return `(${a.e} COLLATE "C" ${op} ${b.e} COLLATE "C")`;
-    return `(${a.e} ${op} ${b.e})`;
+    const x = airtableSemantics.toNumber(a).v;
+    const y = airtableSemantics.toNumber(b).v;
+    return jsNumericCompare(op, x, y);
   },
   compareMixed(op, a, b) {
-    if (a.k === "text" || b.k === "text") {
-      const ta = a.k === "text" ? a.e : airtableSemantics.toText(a).v;
-      const tb = b.k === "text" ? b.e : airtableSemantics.toText(b).v;
-      return `(${ta} COLLATE "C" ${op} ${tb} COLLATE "C")`;
-    }
-    return `(${airtableSemantics.toNumber(a).v} ${op} ${airtableSemantics.toNumber(b).v})`;
+    // JavaScript loose comparison: text against a number/boolean is compared as Number(text).
+    return jsNumericCompare(op, airtableSemantics.toNumber(a).v, airtableSemantics.toNumber(b).v);
   },
 };
 
@@ -227,7 +282,7 @@ export class SqlGen {
     readonly options: CompileOptions,
     readonly fail: Fail,
   ) {
-    this.sem = dialect === "airtable" ? airtableSemantics : spreadsheetSemantics;
+    this.sem = dialect === "airtable" ? airtableSemantics : spreadsheetSemantics(dialect);
   }
 
   // ---- literals
@@ -420,7 +475,13 @@ export class SqlGen {
       case "error": return this.error(n.code);
       case "field": {
         const t = this.fieldType(n.name, n);
-        return { v: this.fieldRef(n.name), t, err: null, nullable: true };
+        const ref = this.fieldRef(n.name);
+        if (this.dialect === "airtable") {
+          // Airtable: an empty text field is "", an unchecked checkbox is blank.
+          if (t === "text") return { v: `COALESCE(${ref}, '')`, t, err: null, nullable: false };
+          if (t === "boolean") return { v: `NULLIF(${ref}, FALSE)`, t, err: null, nullable: true };
+        }
+        return { v: ref, t, err: null, nullable: true };
       }
       case "column":
         return this.fail("INVALID_ARGUMENT", "Whole-column range used outside an aggregate function", n.start, n.end);
@@ -443,6 +504,15 @@ export class SqlGen {
     }
   }
 
+  /** Operand of * or /: Airtable rejects any text there, even empty text. */
+  mulDivNumber(x: SqlVal): SqlVal {
+    if (!this.sem.strictMulDiv) return this.toNumber(x);
+    if (x.t === "text") return this.make("number", "NULL::float8", [x.err, quoteText("#ERROR!")]);
+    const n = this.toNumber(x);
+    if (x.t !== "any") return n;
+    return this.make("number", n.v, [x.err, errorIf(`jsonb_typeof(${x.v}) = 'string'`, "#ERROR!"), n.err]);
+  }
+
   binary(op: BinaryOperator, a: SqlVal, b: SqlVal): SqlVal {
     switch (op) {
       case "&": {
@@ -451,22 +521,31 @@ export class SqlGen {
         return this.make("text", `(${x.v} || ${y.v})`, [x.err, y.err]);
       }
       case "+":
-      case "-":
-      case "*": {
+      case "-": {
         const x = this.toNumber(a);
         const y = this.toNumber(b);
         return this.make("number", `(${x.v} ${op} ${y.v})`, [x.err, y.err]);
       }
+      case "*": {
+        const x = this.mulDivNumber(a);
+        const y = this.mulDivNumber(b);
+        return this.make("number", `(${x.v} * ${y.v})`, [x.err, y.err]);
+      }
       case "/": {
-        const x = this.toNumber(a);
-        const y = this.toNumber(b);
-        return this.make("number", `(${x.v} / NULLIF(${y.v}, 0))`, [x.err, y.err, errorIf(`${y.v} = 0`, this.sem.divZeroError)]);
+        const x = this.mulDivNumber(a);
+        const y = this.mulDivNumber(b);
+        if (this.sem.divZero === "ieee") {
+          const zero = `CASE WHEN ${x.v} = 'NaN'::float8 OR ${x.v} = 0 THEN 'NaN'::float8 WHEN ${x.v} > 0 THEN 'Infinity'::float8 ELSE '-Infinity'::float8 END`;
+          return this.make("number", `CASE WHEN ${y.v} = 0 THEN ${zero} ELSE ${x.v} / ${y.v} END`, [x.err, y.err]);
+        }
+        return this.make("number", `(${x.v} / NULLIF(${y.v}, 0))`, [x.err, y.err, errorIf(`${y.v} = 0`, this.sem.divZero)]);
       }
       case "^": {
         const x = this.toNumber(a);
         const y = this.toNumber(b);
         const zeroZero = this.dialect === "excel" ? ` WHEN ${x.v} = 0 AND ${y.v} = 0 THEN '#NUM!'` : "";
-        const err = `CASE WHEN ${x.v} = 0 AND ${y.v} < 0 THEN '#DIV/0!'${zeroZero} WHEN ${x.v} < 0 AND ${y.v} <> trunc(${y.v}) THEN '#NUM!' END`;
+        const zeroNeg = this.dialect === "sheets" ? "'#NUM!'" : "'#DIV/0!'";
+        const err = `CASE WHEN ${x.v} = 0 AND ${y.v} < 0 THEN ${zeroNeg}${zeroZero} WHEN ${x.v} < 0 AND ${y.v} <> trunc(${y.v}) THEN '#NUM!' END`;
         const v = `CASE WHEN (${x.v} = 0 AND ${y.v} < 0) OR (${x.v} < 0 AND ${y.v} <> trunc(${y.v})) THEN NULL ELSE power(${x.v}, ${y.v}) END`;
         return this.make("number", v, [x.err, y.err, err]);
       }

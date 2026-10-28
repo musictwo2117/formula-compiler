@@ -31,6 +31,8 @@ export interface ParserConfig {
   constants: Record<string, boolean>;
   /** Extra hint for bare identifiers that are not constants. */
   bareIdentifierHint: string;
+  /** Airtable: a bare word such as num5 is a field name (like {num5}). */
+  bareIdentifiersAreFields?: boolean;
   /** Hints for operators that exist in other dialects but not this one, e.g. "<>" in Airtable. */
   operatorHints?: Record<string, string>;
   /** Whether omitted arguments like IF(A1,,1) are valid syntax in the source program. */
@@ -117,6 +119,7 @@ export function parse(formula: string, config: ParserConfig, fail: Fail): Node {
         if (name in config.constants) {
           return { type: "Boolean", value: config.constants[name]!, start: t.start, end: t.end };
         }
+        if (config.bareIdentifiersAreFields) return { type: "Field", name: t.text, start: t.start, end: t.end };
         return fail(
           "UNKNOWN_NAME",
           `Unknown name "${t.text}". ${config.bareIdentifierHint}`,

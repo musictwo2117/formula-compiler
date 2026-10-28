@@ -6,7 +6,7 @@
  */
 import type { BoundCall, BoundNode } from "../core/ast";
 import { registry } from "../core/registry";
-import type { Dialect } from "../core/types";
+import type { Dialect, FieldType } from "../core/types";
 
 export function jsString(s: string): string {
   // U+2028/U+2029 are valid in JSON but were line terminators in older JS.
@@ -16,7 +16,10 @@ export function jsString(s: string): string {
 const BINARY: Record<string, string> = { "+": "add", "-": "sub", "*": "mul", "/": "div", "^": "pow", "&": "concat" };
 
 export class JsGen {
-  constructor(readonly dialect: Dialect) {}
+  constructor(
+    readonly dialect: Dialect,
+    readonly fieldTypes: Record<string, FieldType> = {},
+  ) {}
 
   expr(n: BoundNode): string {
     switch (n.kind) {
@@ -29,8 +32,11 @@ export class JsGen {
         return n.value ? "true" : "false";
       case "error":
         return `rt.err(${jsString(n.code)})`;
-      case "field":
+      case "field": {
+        const type = this.fieldTypes[n.name];
+        if (this.dialect === "airtable" && type) return `rt.f(record[${jsString(n.name)}], ${jsString(n.name)}, ${jsString(type)})`;
         return `rt.v(record[${jsString(n.name)}], ${jsString(n.name)})`;
+      }
       case "column":
         return `rt.col(ctx, ${jsString(n.name)})`;
       case "unary":
@@ -71,7 +77,13 @@ export function eagerJs(call: BoundCall, g: JsGen): string {
   return g.call(call.name, call.args.map((a) => g.expr(a)));
 }
 
-export function generateJs(root: BoundNode, dialect: Dialect): string {
-  const body = new JsGen(dialect).expr(root);
+export function generateJs(root: BoundNode, dialect: Dialect, fieldTypes?: Record<string, FieldType>): string {
+  let body = new JsGen(dialect, fieldTypes).expr(root);
+  if (isTopLevelSearch(root, dialect)) body = `rt.searchResult(${body})`;
   return `(record, rt, ctx) => rt.result(${body})`;
+}
+
+/** Airtable shows a not-found SEARCH as empty when it is the whole formula. */
+export function isTopLevelSearch(root: BoundNode, dialect: Dialect): boolean {
+  return dialect === "airtable" && root.kind === "call" && root.name === "SEARCH";
 }

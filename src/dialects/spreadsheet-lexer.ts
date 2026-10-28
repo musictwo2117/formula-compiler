@@ -18,6 +18,7 @@ import {
   type Token,
 } from "../core/lexer-utils";
 import type { LocaleOptions } from "../core/types";
+import { truncateTo15Digits } from "../runtime/common";
 
 const OPERATORS = ["<=", ">=", "<>", "!=", "==", "=", "<", ">", "+", "-", "*", "/", "^", "&", "%"] as const;
 
@@ -260,7 +261,9 @@ export function createSpreadsheetLexer(opts: SpreadsheetLexerOptions): Lexer {
         const row = /^\$?[0-9]+:\$?[0-9]+/.exec(src.slice(i));
         if (row) fail("UNSUPPORTED_REFERENCE", `Whole-row range ${row[0]} is not supported`, start, start + row[0].length);
         const num = readNumber(src, i, decimalSep)!;
-        push("number", start, num.end, num.value);
+        // Sheets and Excel keep 15 significant digits of a typed number (1234567890123456 → 1234567890123450).
+        const digits = src.slice(start, num.end).replace(decimalSep, ".");
+        push("number", start, num.end, Number(truncateTo15Digits(digits)));
         continue;
       }
       if (ch === "(") {

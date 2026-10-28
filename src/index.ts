@@ -8,7 +8,7 @@ import type { ParserConfig } from "./core/parser";
 import { parse } from "./core/parser";
 import { lookupFunction, resolve } from "./core/resolve";
 import { DIALECTS, type CompileOptions, type Dialect, type LocaleOptions, type Target } from "./core/types";
-import { generateJs } from "./codegen/js";
+import { generateJs, isTopLevelSearch } from "./codegen/js";
 import { SQL_TYPE_NAMES, SqlGen, type SqlType } from "./codegen/sql";
 import { airtableParserConfig } from "./dialects/airtable/parser-config";
 import { excelParserConfig } from "./dialects/excel/parser-config";
@@ -104,13 +104,15 @@ export function compile(formula: string, options: CompileOptions): CompileResult
   const dialect = options.from;
   if (options.to === "ast") return { target: "ast", dialect, ast };
   if (options.to === "js") {
-    const code = generateJs(bound, dialect);
+    const code = generateJs(bound, dialect, options.fieldTypes);
     const fn = new Function(`return ${code}`)() as (r: unknown, rt: unknown, ctx: unknown) => Value;
     const rt = runtimeFor(dialect);
     return { target: "js", dialect, code, evaluate: (record, ctx) => fn(record ?? {}, rt, ctx ?? {}) };
   }
   const g = new SqlGen(dialect, options, makeFail(dialect, formula));
-  const out = g.finish(g.expr(bound));
+  let value = g.expr(bound);
+  if (isTopLevelSearch(bound, dialect)) value = { ...value, v: `NULLIF(${value.v}, 0::float8)`, nullable: true };
+  const out = g.finish(value);
   return {
     target: "sql",
     dialect,

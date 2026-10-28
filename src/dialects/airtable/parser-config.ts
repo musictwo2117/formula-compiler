@@ -2,8 +2,9 @@ import type { ParserConfig } from "../../core/parser";
 import { lexAirtable } from "./lexer";
 
 /**
- * Precedence (high → low): unary -, * /, + -, &, comparisons.
- * Airtable does not document its precedence table; see docs/behavior-notes.md.
+ * Precedence (high → low): unary -, * /, then + - & on one level (left to
+ * right), then comparisons. Checked against Airtable: "x" & 1 + 2 is NaN,
+ * 2 + 3 & "x" is "5x", "x" & 1 * 2 is "x2".
  */
 export const airtableParserConfig: ParserConfig = {
   dialect: "airtable",
@@ -15,7 +16,7 @@ export const airtableParserConfig: ParserConfig = {
     ">": { bp: 1, assoc: "left", operator: ">" },
     "<=": { bp: 1, assoc: "left", operator: "<=" },
     ">=": { bp: 1, assoc: "left", operator: ">=" },
-    "&": { bp: 2, assoc: "left", operator: "&" },
+    "&": { bp: 3, assoc: "left", operator: "&" },
     "+": { bp: 3, assoc: "left", operator: "+" },
     "-": { bp: 3, assoc: "left", operator: "-" },
     "*": { bp: 4, assoc: "left", operator: "*" },
@@ -23,7 +24,8 @@ export const airtableParserConfig: ParserConfig = {
   },
   prefix: { "-": { bp: 6 } },
   constants: {},
-  bareIdentifierHint: "Wrap field names in braces, e.g. {Name}; use TRUE() / FALSE() for booleans",
+  bareIdentifierHint: "",
+  bareIdentifiersAreFields: true,
   operatorHints: {
     "<>": "Airtable uses != for not-equal",
     "^": "Airtable has no ^ operator (POWER() is not supported yet)",

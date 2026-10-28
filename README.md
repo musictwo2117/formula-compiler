@@ -91,7 +91,7 @@ types (`IF(x, "yes", 0)`), the result is `jsonb`. Whole-column aggregates become
 
 ### Examples by program
 
-**Airtable** — `{Field name}` (Thai, spaces and `\}` allowed), `"..."` or `'...'` strings, `!=`, `&`:
+**Airtable** — `{Field name}` (Thai, spaces and `\}` allowed) or a bare `FieldName`, `"..."` or `'...'` strings, `!=`, `&`:
 
 ```ts
 compile("IF({Unit Price} * {Qty} > 100, 'big', BLANK())", { from: "airtable", to: "js" });
@@ -200,9 +200,10 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 
 ## Limitations
 
-- **Behaviour not verified against the live programs.** The rules follow each program's documentation and
-  well-known behaviour; items we could not confirm are listed in [docs/behavior-notes.md](docs/behavior-notes.md)
-  and appear as `todo` entries in the test run.
+- **Airtable and Google Sheets rules were checked against the real programs** (2026-10-28); Excel rules
+  follow Microsoft's documentation and were not run. See [docs/behavior-notes.md](docs/behavior-notes.md).
+- Airtable field names are matched exactly as written (Airtable itself is case-insensitive), and the JS
+  target needs `fieldTypes` to tell an empty text field from an empty number field.
 - References: only cells in the formula's own row, and whole columns (`A:A`, `Table1[col]`) inside `SUM`,
   `AVERAGE`, `COUNT`, `COUNTA`, `MIN`, `MAX`, `COUNTIF`, `SUMIF`. Bounded ranges (`A2:A10`), other rows,
   other sheets, whole rows and multi-column ranges are rejected with `UNSUPPORTED_REFERENCE`.
@@ -211,7 +212,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - SQL: literal `COUNTIF`/`SUMIF` criteria (`">5"`, `"a*"`) compile to plain SQL; computed ones (`">"&C2`)
   are parsed per row by PostgreSQL, which gives a much longer expression. Very large numbers can overflow `double precision` and raise a PostgreSQL error. The SQL repeats
   sub-expressions, so it grows quickly with deep nesting of error-producing expressions.
-- `LEN` counts code points (Excel counts UTF-16 units, so emoji differ).
+- Strings are handled as code points; Sheets counts UTF-16 units, so `LEN` of an emoji matches Sheets but
+  `LEFT`/`MID` on emoji can differ.
 
 ## Contributing
 

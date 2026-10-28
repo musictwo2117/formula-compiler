@@ -8,7 +8,7 @@ import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { FieldType } from "../core/types";
 import type { JsGen } from "../codegen/js";
-import { errorIf, quoteText, sqlNumber, type SqlGen, type SqlVal } from "../codegen/sql";
+import { errorIf, quoteText, sheetsNumberSql, sqlNumber, type SqlGen, type SqlVal } from "../codegen/sql";
 import { NUMERIC_TEXT_SQL, type RoundMode } from "../runtime/common";
 import { parseCriterion, type Criterion, type SpreadsheetVariant } from "../runtime/spreadsheet";
 import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, roundDigits, roundSql, sqlArgs, substituteNthSql, textSql } from "./shared";
@@ -67,6 +67,7 @@ function likePattern(wildcard: string): string {
 /** A criterion operand as SQL expressions (literal or computed per outer row). */
 type SqlOperand =
   | { kind: "blank" }
+  | { kind: "nothing" }
   | { kind: "number"; sql: string }
   | { kind: "boolean"; sql: string }
   /** `lower` is the lower-cased text, `like` the LIKE pattern built from it. */
@@ -76,14 +77,21 @@ const CRITERION_OPS = ["=", "<>", "<", ">", "<=", ">="] as const;
 type CriterionOp = (typeof CRITERION_OPS)[number];
 
 /** SQL condition for one row of a COUNTIF/SUMIF range. Mirrors matchesCriterion(). */
-function operandSql(col: string, type: FieldType, op: CriterionOp, operand: SqlOperand): string {
+function operandSql(col: string, type: FieldType, op: CriterionOp, operand: SqlOperand, variant: SpreadsheetVariant): string {
   const ne = op === "<>" ? "TRUE" : "FALSE";
   switch (operand.kind) {
+    case "nothing":
+      return "FALSE";
     case "blank":
       if (op === "=") return type === "text" ? `(${col} IS NULL OR ${col} = '')` : `${col} IS NULL`;
       if (op === "<>") return type === "text" ? `COALESCE(${col} <> '', FALSE)` : `${col} IS NOT NULL`;
       return "FALSE";
     case "number":
+      if (variant === "sheets" && type === "text" && op === "=") {
+        // Sheets: "=5" also matches the text "5".
+        const p = sheetsNumberSql(col);
+        return `COALESCE(${col} <> '' AND ${p.valid} AND ${p.v} = ${operand.sql}, FALSE)`;
+      }
       if (type !== "number") return ne;
       if (op === "<>") return `(${col} IS NULL OR ${col} <> ${operand.sql})`;
       return `COALESCE(${col} ${op} ${operand.sql}, FALSE)`;
@@ -102,14 +110,14 @@ function operandSql(col: string, type: FieldType, op: CriterionOp, operand: SqlO
   }
 }
 
-export function criterionSql(col: string, type: FieldType, crit: Criterion): string {
+export function criterionSql(col: string, type: FieldType, crit: Criterion, variant: SpreadsheetVariant): string {
   const o = crit.operand;
   const operand: SqlOperand =
-    o.kind === "blank" ? o
+    o.kind === "blank" || o.kind === "nothing" ? o
     : o.kind === "number" ? { kind: "number", sql: sqlNumber(o.value) }
     : o.kind === "boolean" ? { kind: "boolean", sql: o.value ? "TRUE" : "FALSE" }
     : { kind: "text", lower: quoteText(o.value.toLowerCase()), like: quoteText(likePattern(o.value.toLowerCase())) };
-  return operandSql(col, type, crit.op, operand);
+  return operandSql(col, type, crit.op, operand, variant);
 }
 
 /** Same as likePattern(), computed by PostgreSQL for a text expression. */
@@ -121,15 +129,15 @@ function likePatternSql(x: string): string {
 }
 
 /** Criterion text parsed by PostgreSQL at run time (">"&C2). Mirrors parseCriterion(). */
-function dynamicTextCriterionSql(col: string, type: FieldType, text: string): string {
+function dynamicTextCriterionSql(col: string, type: FieldType, text: string, variant: SpreadsheetVariant): string {
   const op = `COALESCE(substring(${text} from '^(<=|>=|<>|<|>|=)'), '=')`;
   const rest = `substring(${text} from '^(?:<=|>=|<>|<|>|=)?(.*)$')`;
   const byOp = (f: (o: CriterionOp) => string) => `CASE ${op} ${CRITERION_OPS.map((o) => `WHEN '${o}' THEN ${f(o)}`).join(" ")} END`;
   const lower = `lower(${rest})`;
-  return `CASE WHEN ${rest} = '' THEN ${byOp((o) => operandSql(col, type, o, { kind: "blank" }))}`
-    + ` WHEN ${rest} ~ ${RE} THEN ${byOp((o) => operandSql(col, type, o, { kind: "number", sql: `(${rest})::float8` }))}`
-    + ` WHEN upper(${rest}) IN ('TRUE', 'FALSE') THEN ${byOp((o) => operandSql(col, type, o, { kind: "boolean", sql: `(upper(${rest}) = 'TRUE')` }))}`
-    + ` ELSE ${byOp((o) => operandSql(col, type, o, { kind: "text", lower, like: likePatternSql(lower) }))} END`;
+  return `CASE WHEN ${rest} = '' THEN ${byOp((o) => operandSql(col, type, o, { kind: "blank" }, variant))}`
+    + ` WHEN ${rest} ~ ${RE} THEN ${byOp((o) => operandSql(col, type, o, { kind: "number", sql: `(${rest})::float8` }, variant))}`
+    + ` WHEN upper(${rest}) IN ('TRUE', 'FALSE') THEN ${byOp((o) => operandSql(col, type, o, { kind: "boolean", sql: `(upper(${rest}) = 'TRUE')` }, variant))}`
+    + ` ELSE ${byOp((o) => operandSql(col, type, o, { kind: "text", lower, like: likePatternSql(lower) }, variant))} END`;
 }
 
 /** Converts an Excel wildcard pattern to a PostgreSQL regex at run time. */
@@ -396,7 +404,7 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
         if (a.kind === "column") return a.type === "number" ? g.columnQuery(a.node.name, a.node, (col) => `COUNT(${col})::float8`) : "0::float8";
         if (a.kind === "ref") return a.type === "number" ? `CASE WHEN ${a.v} IS NULL THEN 0::float8 ELSE 1::float8 END` : "0::float8";
         const p = g.dispatch(a.val, (k) => ({
-          v: k.k === "number" || k.k === "boolean" ? "1::float8" : k.k === "text" ? `CASE WHEN ${k.e} ~ ${RE} THEN 1::float8 ELSE 0::float8 END` : "0::float8",
+          v: k.k === "number" || k.k === "boolean" ? "1::float8" : k.k === "text" ? `CASE WHEN ${variant === "sheets" ? `${k.e} = '' OR ${sheetsNumberSql(k.e).valid}` : `${k.e} ~ ${RE}`} THEN 1::float8 ELSE 0::float8 END` : "0::float8",
           err: null,
         }));
         return a.val.err === null ? p.v : `CASE WHEN ${a.val.err} IS NOT NULL THEN 0::float8 ELSE ${p.v} END`;
@@ -426,17 +434,17 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
   const criterionOf = (g: SqlGen, crit: BoundNode): { where: (col: string, t: FieldType) => string; err: string | null } => {
     const lit = isLiteral(crit);
     if (lit !== undefined) {
-      const parsed = parseCriterion(lit);
-      return { where: (col, t) => criterionSql(col, t, parsed), err: null };
+      const parsed = parseCriterion(lit, variant);
+      return { where: (col, t) => criterionSql(col, t, parsed, variant), err: null };
     }
     const val = g.expr(crit);
     const where = (col: string, t: FieldType) =>
       g.dispatch(val, (a) => {
         switch (a.k) {
-          case "blank": return { v: operandSql(col, t, "=", { kind: "blank" }), err: null };
-          case "number": return { v: operandSql(col, t, "=", { kind: "number", sql: a.e }), err: null };
-          case "boolean": return { v: operandSql(col, t, "=", { kind: "boolean", sql: a.e }), err: null };
-          case "text": return { v: dynamicTextCriterionSql(col, t, a.e), err: null };
+          case "blank": return { v: operandSql(col, t, "=", { kind: variant === "sheets" ? "nothing" : "blank" }, variant), err: null };
+          case "number": return { v: operandSql(col, t, "=", { kind: "number", sql: a.e }, variant), err: null };
+          case "boolean": return { v: operandSql(col, t, "=", { kind: "boolean", sql: a.e }, variant), err: null };
+          case "text": return { v: dynamicTextCriterionSql(col, t, a.e, variant), err: null };
         }
       }).v;
     return { where, err: val.err };
@@ -478,7 +486,18 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
   });
 
   // ------------------------------------------------------------ text
-  def({ name: "LEN", minArgs: 1, maxArgs: 1, summary: "LEN(text)", sql: (c, g) => { const t = textSql(g, sqlArgs(c, g), (s) => s); return g.make("number", `length(${t.v})::float8`, [t.err]); } });
+  def({
+    name: "LEN",
+    minArgs: 1,
+    maxArgs: 1,
+    summary: "LEN(text)",
+    notes: variant === "sheets" ? "Counts UTF-16 units, so an emoji is 2." : undefined,
+    sql: (c, g) => {
+      const t = textSql(g, sqlArgs(c, g), (s) => s);
+      const astral = variant === "sheets" ? ` + length(regexp_replace(${t.v}, ${quoteText("[^\\U00010000-\\U0010FFFF]")}, '', 'g'))` : "";
+      return g.make("number", `(length(${t.v})${astral})::float8`, [t.err]);
+    },
+  });
   def({ name: "UPPER", minArgs: 1, maxArgs: 1, summary: "UPPER(text)", sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `upper(${s})`) });
   def({ name: "LOWER", minArgs: 1, maxArgs: 1, summary: "LOWER(text)", sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `lower(${s})`) });
   def({
@@ -486,7 +505,12 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
     minArgs: 1,
     maxArgs: 1,
     summary: "TRIM(text) — also collapses inner runs of spaces",
-    sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `regexp_replace(btrim(${s}, ' '), ' {2,}', ' ', 'g')`),
+    sql: (c, g) => {
+      // Sheets also strips tabs and newlines at the ends; both collapse inner runs of spaces.
+      const ends = (s: string) =>
+        variant === "sheets" ? `regexp_replace(${s}, ${quoteText("^[ \\t\\n\\r\\f\\v]+|[ \\t\\n\\r\\f\\v]+$")}, '', 'g')` : `btrim(${s}, ' ')`;
+      return textSql(g, sqlArgs(c, g), (s) => `regexp_replace(${ends(s)}, ' {2,}', ' ', 'g')`);
+    },
   });
   def({ name: "CONCATENATE", minArgs: 1, maxArgs: Infinity, summary: "CONCATENATE(text1, ...)", sql: (c, g) => textSql(g, sqlArgs(c, g), (...xs) => `(${xs.join(" || ")})`) });
   def({
@@ -542,7 +566,7 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
       summary: `${name}(search_for, text, [start])`,
       notes: name === "FIND"
         ? "Case-sensitive; #VALUE! when not found."
-        : variant === "excel" ? "Case-insensitive, supports * ? ~ wildcards; #VALUE! when not found." : "Case-insensitive; #VALUE! when not found.",
+        : "Case-insensitive, supports * ? ~ wildcards; #VALUE! when not found.",
       sql: (c, g) => {
         const [f, w, st] = sqlArgs(c, g);
         const start = g.toNumber(st ?? g.number(1));
@@ -550,7 +574,7 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
         const S = `GREATEST(${g.int(start)}, 1)`;
         let p: string;
         let v: string;
-        if (name === "SEARCH" && variant === "excel") {
+        if (name === "SEARCH") {
           p = `regexp_instr(lower(${hay.v}), ${wildcardRegexSql(`lower(${needle.v})`)}, LEAST(${S}, length(${hay.v}) + 1))`;
           v = `${p}::float8`;
         } else {

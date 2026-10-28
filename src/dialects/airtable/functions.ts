@@ -1,25 +1,32 @@
 /**
  * Airtable function table. JS calls the helpers in src/runtime/airtable.ts;
- * SQL mirrors them. Behaviour that is not confirmed against Airtable is
- * listed in docs/behavior-notes.md.
+ * SQL mirrors them. The behaviour was checked against a real Airtable base
+ * (see docs/behavior-notes.md).
  */
 import { registry } from "../../core/registry";
-import { errorIf, quoteText, type SqlVal } from "../../codegen/sql";
-import {
-  DATE_FUNCTIONS,
-  definer,
-  lazyArgsJs,
-  numericSql,
-  roundDigits,
-  roundSql,
-  sqlArgs,
-  substituteNthSql,
-  textSql,
-} from "../shared";
-import { NUMERIC_TEXT, NUMERIC_TEXT_SQL, STRIP_CURRENCY_SQL, stripCurrency, type RoundMode } from "../../runtime/common";
+import { quoteText, sqlFloat, type SqlGen, type SqlVal } from "../../codegen/sql";
+import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, sqlArgs, substituteNthSql } from "../shared";
+import { airtableValue } from "../../runtime/common";
+import { switchJs } from "../spreadsheet-functions";
 
 const def = definer("airtable");
 const ERR = "#ERROR!";
+
+/** Text argument of a text function: numbers and booleans are #ERROR! in Airtable. */
+function textArg(g: SqlGen, x: SqlVal): SqlVal {
+  const p = g.dispatch(x, (a) => {
+    if (a.k === "text") return { v: a.e, err: null };
+    if (a.k === "blank") return { v: "''", err: null };
+    return { v: "NULL::text", err: quoteText(ERR) };
+  });
+  return g.make("text", p.v, [x.err, p.err]);
+}
+
+const pow10 = (d: string) => `power(10::float8, ${d})`;
+/** Math.round(v): ties toward +infinity. */
+const jsRound = (v: string) => `CASE WHEN ${v} - floor(${v}) >= 0.5 THEN ceil(${v}) ELSE floor(${v}) END`;
+/** Clamp an index to [0, len] the way String.prototype.substring does. */
+const clampIndex = (x: string, len: string) => `LEAST(GREATEST(CASE WHEN ${x} = 'NaN'::float8 THEN 0 ELSE trunc(${x}) END, 0), ${len})::int`;
 
 def({
   name: "IF",
@@ -40,7 +47,7 @@ def({
   maxArgs: Infinity,
   summary: "SWITCH(expression, pattern, result, ..., [default])",
   notes: "No match and no default gives blank.",
-  js: (c, g) => g.call("SWITCH", c.args.map((a, i) => (i === 0 || i % 2 === 1) && !(i === c.args.length - 1 && i % 2 === 1) ? g.expr(a) : g.lazy(a))),
+  js: switchJs,
   sql: (c, g) => {
     const [e, ...rest] = sqlArgs(c, g);
     const arms: { cond: SqlVal; then: SqlVal }[] = [];
@@ -83,10 +90,12 @@ def({
   name: "ISERROR",
   minArgs: 1,
   maxArgs: 1,
-  summary: "ISERROR(expression)",
+  summary: "ISERROR(expression) — 1 for errors and for Infinity / NaN, else 0",
   sql: (c, g) => {
     const x = g.expr(c.args[0]!);
-    return g.make("boolean", x.err === null ? "FALSE" : `(${x.err} IS NOT NULL)`, []);
+    const special = g.dispatch(x, (a) => ({ v: a.k === "number" ? `(${a.e} IN ('Infinity'::float8, '-Infinity'::float8, 'NaN'::float8))` : "FALSE", err: null })).v;
+    const cond = x.err === null ? special : `(${x.err} IS NOT NULL OR ${special})`;
+    return g.make("number", cond === "FALSE" ? "0::float8" : `CASE WHEN ${cond} THEN 1::float8 ELSE 0::float8 END`, []);
   },
 });
 
@@ -104,22 +113,22 @@ def({
 
 // ---------------------------------------------------------------- numbers
 
-const ROUNDS: [string, RoundMode, string][] = [
-  ["ROUND", "halfUp", "ties round toward +infinity (ROUND(-2.5, 0) = -2)"],
-  ["ROUNDUP", "up", "away from zero"],
-  ["ROUNDDOWN", "down", "toward zero"],
-];
-for (const [name, mode, note] of ROUNDS) {
+def({
+  name: "ROUND",
+  minArgs: 2,
+  maxArgs: 2,
+  summary: "ROUND(value, precision)",
+  notes: "Math.round(value × 10^precision) / 10^precision on doubles: ROUND(1.005, 2) = 1, ties toward +infinity.",
+  sql: (c, g) => numericSql(g, sqlArgs(c, g), (x, d) => `(${jsRound(`(${x} * ${pow10(d)})`)} / ${pow10(d)})`),
+});
+for (const [name, fn, note] of [["ROUNDUP", "ceil", "away from zero"], ["ROUNDDOWN", "floor", "toward zero"]] as const) {
   def({
     name,
     minArgs: 2,
     maxArgs: 2,
     summary: `${name}(value, precision)`,
-    notes: note,
-    sql: (c, g) => {
-      const [x, d] = sqlArgs(c, g).map((a) => g.toNumber(a));
-      return g.make("number", roundSql(mode, x!.v, roundDigits(g, d!)), [x!.err, d!.err]);
-    },
+    notes: `${note}, on doubles: ROUNDUP(0.1 + 0.2, 1) = 0.4`,
+    sql: (c, g) => numericSql(g, sqlArgs(c, g), (x, d) => `(sign(${x}) * ${fn}(abs(${x}) * ${pow10(d)}) / ${pow10(d)} + 0::float8)`),
   });
 }
 
@@ -130,44 +139,75 @@ def({
   minArgs: 2,
   maxArgs: 2,
   summary: "MOD(value, divisor)",
-  notes: "Result takes the sign of the dividend (unverified, see behavior notes).",
+  notes: "|value| mod |divisor| with the sign of the divisor: MOD(-7, 3) = 1, MOD(7, -3) = -1.",
   sql: (c, g) =>
-    numericSql(g, sqlArgs(c, g), (a, b) => `(${a} - ${b} * trunc(${a} / NULLIF(${b}, 0)))`, (_, b) => errorIf(`${b} = 0`, ERR)),
+    numericSql(g, sqlArgs(c, g), (a, b) => `CASE WHEN ${b} = 0 THEN 'NaN'::float8 ELSE sign(${b}) * (abs(${a}) - abs(${b}) * trunc(abs(${a}) / abs(${b}))) + 0::float8 END`),
 });
 
-def({ name: "SUM", minArgs: 1, maxArgs: Infinity, summary: "SUM(number1, ...)", sql: (c, g) => numericSql(g, sqlArgs(c, g), (...xs) => `(${xs.join(" + ")})`) });
+def({
+  name: "SUM",
+  minArgs: 1,
+  maxArgs: Infinity,
+  summary: "SUM(number1, ...) — blanks count as 0, numeric text counts, other text is skipped",
+  sql: (c, g) => {
+    const parts = sqlArgs(c, g).map((x) => {
+      const p = g.dispatch(x, (a) => {
+        if (a.k !== "text") return g.sem.toNumber(a);
+        const n = g.sem.toNumber(a).v;
+        return { v: `CASE WHEN ${n} = 'NaN'::float8 THEN 0::float8 ELSE ${n} END`, err: null };
+      });
+      return g.make("number", p.v, [x.err]);
+    });
+    return g.make("number", `(${parts.map((p) => p.v).join(" + ")})`, parts.map((p) => p.err));
+  },
+});
+
+/** Numbers taken by AVERAGE / MIN / MAX: blanks and text are skipped (NULL). */
+function countedNumbers(c: Parameters<typeof sqlArgs>[0], g: SqlGen): SqlVal[] {
+  return sqlArgs(c, g).map((x) => {
+    const p = g.dispatch(x, (a) => (a.k === "number" || a.k === "boolean" ? g.sem.toNumber(a) : { v: "NULL::float8", err: null }));
+    return g.make("number", p.v, [x.err], true);
+  });
+}
+
 def({
   name: "AVERAGE",
   minArgs: 1,
   maxArgs: Infinity,
-  summary: "AVERAGE(number1, ...)",
-  sql: (c, g) => numericSql(g, sqlArgs(c, g), (...xs) => `((${xs.join(" + ")}) / ${xs.length})`),
+  summary: "AVERAGE(number1, ...) — blanks and text are skipped",
+  sql: (c, g) => {
+    const ns = countedNumbers(c, g);
+    const sum = ns.map((n) => `COALESCE(${n.v}, 0::float8)`).join(" + ");
+    const count = ns.map((n) => `CASE WHEN ${n.v} IS NULL THEN 0 ELSE 1 END`).join(" + ");
+    return g.make("number", `CASE WHEN (${count}) = 0 THEN 'NaN'::float8 ELSE (${sum}) / (${count}) END`, ns.map((n) => n.err));
+  },
 });
-def({ name: "MIN", minArgs: 1, maxArgs: Infinity, summary: "MIN(number1, ...)", sql: (c, g) => numericSql(g, sqlArgs(c, g), (...xs) => `LEAST(${xs.join(", ")})`) });
-def({ name: "MAX", minArgs: 1, maxArgs: Infinity, summary: "MAX(number1, ...)", sql: (c, g) => numericSql(g, sqlArgs(c, g), (...xs) => `GREATEST(${xs.join(", ")})`) });
+for (const [name, fn, empty] of [["MIN", "LEAST", Infinity], ["MAX", "GREATEST", -Infinity]] as const) {
+  def({
+    name,
+    minArgs: 1,
+    maxArgs: Infinity,
+    summary: `${name}(number1, ...) — blanks and text are skipped`,
+    sql: (c, g) => {
+      const ns = countedNumbers(c, g);
+      return g.make("number", `COALESCE(${fn}(${ns.map((n) => n.v).join(", ")}), ${sqlFloat(empty)})`, ns.map((n) => n.err));
+    },
+  });
+}
 
 def({
   name: "VALUE",
   minArgs: 1,
   maxArgs: 1,
-  summary: "VALUE(text) — convert text to a number; a leading $ is dropped",
+  summary: "VALUE(text) — keeps digits and \".\"; \"-\" makes it negative, \"%\" divides by 100",
   sql: (c, g) => {
     const x = g.expr(c.args[0]!);
-    const re = quoteText(NUMERIC_TEXT_SQL);
     const p = g.dispatch(x, (a) => {
-      switch (a.k) {
-        case "blank": return { v: "0::float8", err: null };
-        case "number": return { v: a.e, err: null };
-        case "boolean": return { v: `CASE WHEN ${a.e} THEN 1::float8 ELSE 0::float8 END`, err: null };
-        case "text": {
-          if (typeof a.lit === "string") {
-            const t = stripCurrency(a.lit);
-            return NUMERIC_TEXT.test(t) ? { v: `${Number(t.trim())}::float8`, err: null } : { v: "NULL::float8", err: quoteText(ERR) };
-          }
-          const t = `regexp_replace(${a.e}, ${quoteText(STRIP_CURRENCY_SQL.pattern)}, ${quoteText(STRIP_CURRENCY_SQL.replacement)})`;
-          return { v: `CASE WHEN ${t} ~ ${re} THEN (${t})::float8 END`, err: `CASE WHEN ${t} ~ ${re} THEN NULL ELSE ${quoteText(ERR)} END` };
-        }
-      }
+      if (a.k !== "text") return g.sem.toNumber(a);
+      if (typeof a.lit === "string") return { v: sqlFloat(airtableValue(a.lit)), err: null };
+      const digits = `regexp_replace(${a.e}, '[^0-9.]', '', 'g')`;
+      const n = `CASE WHEN ${digits} = '' THEN 0::float8 WHEN ${digits} ~ '^[0-9]*\\.?[0-9]*$' AND ${digits} <> '.' THEN (${digits})::float8 ELSE 'NaN'::float8 END`;
+      return { v: `(${n} * CASE WHEN strpos(${a.e}, '-') > 0 THEN -1 ELSE 1 END / CASE WHEN strpos(${a.e}, '%') > 0 THEN 100 ELSE 1 END)`, err: null };
     });
     return g.make("number", p.v, [x.err, p.err]);
   },
@@ -175,73 +215,100 @@ def({
 
 // ---------------------------------------------------------------- text
 
-const count = (g: Parameters<typeof roundDigits>[0], x: SqlVal) => g.int(g.toNumber(x), 0);
+const TEXT_NOTE = "Numbers and booleans as the text argument are #ERROR! (use & \"\" to convert).";
 
-def({ name: "LEN", minArgs: 1, maxArgs: 1, summary: "LEN(string)", sql: (c, g) => { const t = textSql(g, sqlArgs(c, g), (s) => s); return g.make("number", `length(${t.v})::float8`, [t.err]); } });
-def({ name: "UPPER", minArgs: 1, maxArgs: 1, summary: "UPPER(string)", sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `upper(${s})`) });
-def({ name: "LOWER", minArgs: 1, maxArgs: 1, summary: "LOWER(string)", sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `lower(${s})`) });
+for (const [name, fn] of [["UPPER", "upper"], ["LOWER", "lower"]] as const) {
+  def({ name, minArgs: 1, maxArgs: 1, summary: `${name}(string)`, notes: TEXT_NOTE, sql: (c, g) => { const t = textArg(g, g.expr(c.args[0]!)); return g.make("text", `${fn}(${t.v})`, [t.err]); } });
+}
+def({
+  name: "LEN",
+  minArgs: 1,
+  maxArgs: 1,
+  summary: "LEN(string) — counts characters (an emoji is 1)",
+  notes: TEXT_NOTE,
+  sql: (c, g) => { const t = textArg(g, g.expr(c.args[0]!)); return g.make("number", `length(${t.v})::float8`, [t.err]); },
+});
 def({
   name: "TRIM",
   minArgs: 1,
   maxArgs: 1,
   summary: "TRIM(string) — remove leading and trailing whitespace",
   notes: "Inner runs of spaces are kept (unlike Sheets/Excel).",
-  sql: (c, g) => textSql(g, sqlArgs(c, g), (s) => `regexp_replace(${s}, ${quoteText("^[ \\t\\n\\r\\f\\v]+|[ \\t\\n\\r\\f\\v]+$")}, '', 'g')`),
+  sql: (c, g) => {
+    const t = textArg(g, g.expr(c.args[0]!));
+    return g.make("text", `regexp_replace(${t.v}, ${quoteText("^[ \\t\\n\\r\\f\\v]+|[ \\t\\n\\r\\f\\v]+$")}, '', 'g')`, [t.err]);
+  },
 });
-def({ name: "CONCATENATE", minArgs: 1, maxArgs: Infinity, summary: "CONCATENATE(text1, ...)", sql: (c, g) => textSql(g, sqlArgs(c, g), (...xs) => `(${xs.join(" || ")})`) });
+def({
+  name: "CONCATENATE",
+  minArgs: 1,
+  maxArgs: Infinity,
+  summary: "CONCATENATE(text1, ...) — converts numbers and booleans",
+  sql: (c, g) => {
+    const ts = sqlArgs(c, g).map((a) => g.toText(a));
+    return g.make("text", `(${ts.map((t) => t.v).join(" || ")})`, ts.map((t) => t.err));
+  },
+});
 
 def({
   name: "LEFT",
   minArgs: 2,
   maxArgs: 2,
   summary: "LEFT(string, howMany)",
+  notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, n] = sqlArgs(c, g);
-    const t = g.toText(s!);
     const k = g.toNumber(n!);
-    return g.make("text", `left(${t.v}, ${count(g, k)})`, [k.err, t.err]);
+    const t = textArg(g, s!);
+    return g.make("text", `left(${t.v}, ${clampIndex(k.v, `length(${t.v})`)})`, [k.err, t.err]);
   },
 });
 def({
   name: "RIGHT",
   minArgs: 2,
   maxArgs: 2,
-  summary: "RIGHT(string, howMany)",
+  summary: "RIGHT(string, howMany) — \"\" when howMany is longer than the string",
+  notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, n] = sqlArgs(c, g);
-    const t = g.toText(s!);
     const k = g.toNumber(n!);
-    return g.make("text", `right(${t.v}, ${count(g, k)})`, [k.err, t.err]);
+    const t = textArg(g, s!);
+    const start = `(length(${t.v}) - ${k.v})`;
+    return g.make("text", `CASE WHEN ${start} < 0 THEN '' ELSE substr(${t.v}, ${clampIndex(start, `length(${t.v})`)} + 1) END`, [k.err, t.err]);
   },
 });
 def({
   name: "MID",
   minArgs: 3,
   maxArgs: 3,
-  summary: "MID(string, whereToStart, count) — 1-based",
+  summary: "MID(string, whereToStart, count) — 1-based; \"\" when whereToStart < 1",
+  notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, st, n] = sqlArgs(c, g);
     const start = g.toNumber(st!);
     const k = g.toNumber(n!);
-    const t = g.toText(s!);
-    return g.make("text", `substr(${t.v}, ${g.int(start, 1)}, ${count(g, k)})`, [start.err, k.err, t.err]);
+    const t = textArg(g, s!);
+    return g.make("text", `CASE WHEN trunc(${start.v}) < 1 THEN '' ELSE substr(${t.v}, ${g.int(start, 1)}, ${g.int(k, 0)}) END`, [start.err, k.err, t.err]);
   },
 });
 
-for (const [name, notFound] of [["FIND", "0"], ["SEARCH", "NULL::float8"]] as const) {
+for (const name of ["FIND", "SEARCH"] as const) {
   def({
     name,
     minArgs: 2,
     maxArgs: 3,
     summary: `${name}(stringToFind, whereToSearch, [startFromPosition])`,
-    notes: name === "FIND" ? "Returns 0 when not found." : "Returns blank when not found; case-sensitive like FIND (unverified).",
+    notes:
+      name === "FIND"
+        ? "Case-sensitive; startFromPosition is 1-based; 0 when not found."
+        : "Same as FIND (case-sensitive, 0 inside expressions); a not-found SEARCH shown as the whole result is empty.",
     sql: (c, g) => {
       const [n, h, st] = sqlArgs(c, g);
-      const start = st ? g.toNumber(st) : g.number(0);
-      const s0 = count(g, start);
-      const [needle, hay] = [g.toText(n!), g.toText(h!)];
-      const v = `CASE WHEN ${s0} > length(${hay.v}) THEN ${notFound} ELSE COALESCE((NULLIF(strpos(substr(${hay.v}, ${s0} + 1), ${needle.v}), 0) + ${s0})::float8, ${notFound}) END`;
-      return g.make("number", v, [start.err, needle.err, hay.err], name === "SEARCH");
+      const start = st ? g.toNumber(st) : g.number(1);
+      const s0 = `(${g.int(start, 1)} - 1)`;
+      const [needle, hay] = [textArg(g, n!), textArg(g, h!)];
+      const v = `CASE WHEN ${s0} > length(${hay.v}) THEN 0::float8 ELSE COALESCE((NULLIF(strpos(substr(${hay.v}, ${s0} + 1), ${needle.v}), 0) + ${s0})::float8, 0::float8) END`;
+      return g.make("number", v, [start.err, needle.err, hay.err]);
     },
   });
 }
@@ -250,15 +317,16 @@ def({
   name: "SUBSTITUTE",
   minArgs: 3,
   maxArgs: 4,
-  summary: "SUBSTITUTE(string, old_text, new_text, [index])",
+  summary: "SUBSTITUTE(string, old_text, new_text, [index]) — index <= 0 changes nothing",
+  notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, o, n, idx] = sqlArgs(c, g);
-    const ts = [g.toText(s!), g.toText(o!), g.toText(n!)];
+    const i = idx ? g.toNumber(idx) : null;
+    const ts = [textArg(g, s!), textArg(g, o!), textArg(g, n!)];
     const [t, old, rep] = ts.map((x) => x.v) as [string, string, string];
-    if (!idx) return g.make("text", `CASE WHEN ${old} = '' THEN ${t} ELSE replace(${t}, ${old}, ${rep}) END`, ts.map((x) => x.err));
-    const i = g.toNumber(idx);
+    if (!i) return g.make("text", `CASE WHEN ${old} = '' THEN ${t} ELSE replace(${t}, ${old}, ${rep}) END`, ts.map((x) => x.err));
     const iv = g.int(i);
-    return g.make("text", substituteNthSql(t, old, rep, iv), [i.err, errorIf(`${iv} < 1`, ERR), ...ts.map((x) => x.err)]);
+    return g.make("text", `CASE WHEN ${iv} < 1 THEN ${t} ELSE ${substituteNthSql(t, old, rep, iv)} END`, [i.err, ...ts.map((x) => x.err)]);
   },
 });
 
@@ -267,13 +335,16 @@ def({
   minArgs: 4,
   maxArgs: 4,
   summary: "REPLACE(string, start_character, number_of_characters, replacement)",
+  notes: "Works like string.substring(0, start - 1) + replacement + string.substring(start - 1 + count).",
   sql: (c, g) => {
     const [s, st, n, r] = sqlArgs(c, g);
     const start = g.toNumber(st!);
     const k = g.toNumber(n!);
-    const [t, rep] = [g.toText(s!), g.toText(r!)];
-    const from = g.int(start, 1);
-    return g.make("text", `(substr(${t.v}, 1, ${from} - 1) || ${rep.v} || substr(${t.v}, ${from} + ${count(g, k)}))`, [start.err, k.err, t.err, rep.err]);
+    const [t, rep] = [textArg(g, s!), textArg(g, r!)];
+    const len = `length(${t.v})`;
+    const a = clampIndex(`(${start.v} - 1)`, len);
+    const b = clampIndex(`(${start.v} - 1 + ${k.v})`, len);
+    return g.make("text", `(left(${t.v}, ${a}) || ${rep.v} || substr(${t.v}, ${b} + 1))`, [start.err, k.err, t.err, rep.err]);
   },
 });
 

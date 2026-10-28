@@ -42,8 +42,11 @@ function inferTypes(rows: Record<string, unknown>[], explicit: Record<string, Fi
   return out;
 }
 
-function normalizeJs(v: unknown): unknown {
-  return isError(v) ? { error: v.code } : v;
+/** Errors as { error }, Infinity / NaN as { specialValue } (the Airtable API's shape). */
+function normalize(v: unknown): unknown {
+  if (isError(v)) return { error: v.code };
+  if (typeof v === "number" && !Number.isFinite(v)) return { specialValue: String(v) };
+  return v;
 }
 
 function caseName(c: TestCase, i: number): string {
@@ -104,7 +107,7 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
 
       it(`${c.unverified ? "[unverified] " : ""}${name}`, async () => {
         const js = compile(c.formula, { ...base, to: "js" });
-        const jsValue = normalizeJs(js.evaluate(current, { rows }));
+        const jsValue = normalize(js.evaluate(current, { rows }));
         expect(jsValue, "JS result").toEqual(c.expected);
 
         if (c.sqlUnsupported) {
@@ -131,7 +134,7 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
             `SELECT ${sql.sql} AS value, ${sql.errorSql} AS error FROM ${t} WHERE "__id" = ${c.row ?? 0}`,
           );
           const r = res.rows[0]!;
-          const sqlValue = r.error !== null ? { error: r.error } : r.value;
+          const sqlValue = r.error !== null ? { error: r.error } : normalize(r.value);
           expect(sqlValue, `SQL result\n${sql.sql}\nerror: ${sql.errorSql}`).toEqual(jsValue);
         } finally {
           await db.exec(`DROP TABLE ${t}`);
