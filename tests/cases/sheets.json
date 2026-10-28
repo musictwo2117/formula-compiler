@@ -161,5 +161,13 @@
   {"name": "date range: EOMONTH(DATE(2024,1,31),-1E7) (checked in Google Sheets 2026-10-28)", "formula": "=EOMONTH(DATE(2024,1,31),-1E7)", "expected": {"error": "#NUM!"}},
   {"name": "date range: DATE(2024,1,1E9) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1,1E9)", "expected": 1000045291, "todo": "Sheets gives 1000045291; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"},
   {"name": "date range: EDATE(DATE(2024,1,31),1E7) (checked in Google Sheets 2026-10-28)", "formula": "=EDATE(DATE(2024,1,31),1E7)", "expected": 304414071, "todo": "Sheets gives 304414071; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"},
-  {"name": "date range: DATE(2024,1E10,1) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1E10,1)", "expected": 65362736589, "todo": "Sheets gives 65362736589; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"}
+  {"name": "date range: DATE(2024,1E10,1) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1E10,1)", "expected": 65362736589, "todo": "Sheets gives 65362736589; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"},
+  {"name": "unicode case: \"İ\"=\"i\" (checked in Google Sheets 2026-10-29)", "formula": "=\"İ\"=\"i\"", "expected": false, "todo": "SQL lower('İ') is 'i' (one code point), so SQL says TRUE; JS agrees with Sheets (see docs/behavior-notes.md)"},
+  {"name": "unicode case: \"ΑΣ\"=\"ασ\" (checked in Google Sheets 2026-10-29)", "formula": "=\"ΑΣ\"=\"ασ\"", "expected": true, "todo": "JS lower-cases a final Σ to ς, so JS says FALSE; SQL agrees with Sheets (see docs/behavior-notes.md)"},
+  {"name": "unicode case: \"ΑΣ\"=\"ας\" (checked in Google Sheets 2026-10-29)", "formula": "=\"ΑΣ\"=\"ας\"", "expected": true, "todo": "SQL lower() always gives σ, so SQL says FALSE; JS agrees with Sheets (see docs/behavior-notes.md)"},
+  {"name": "unicode case: \"σ\"=\"ς\" (checked in Google Sheets 2026-10-29)", "formula": "=\"σ\"=\"ς\"", "expected": true, "todo": "Sheets folds ς to σ; JS and SQL lower-case only, so both say FALSE (see docs/behavior-notes.md)"},
+  {"name": "unicode case: \"ß\"=\"ẞ\" (checked in Google Sheets 2026-10-29)", "formula": "=\"ß\"=\"ẞ\"", "expected": true},
+  {"name": "unicode case: \"É\"=\"é\" (checked in Google Sheets 2026-10-29)", "formula": "=\"É\"=\"é\"", "expected": true},
+  {"name": "unicode case: LEN(LOWER(\"İ\")) (checked in Google Sheets 2026-10-29)", "formula": "=LEN(LOWER(\"İ\"))", "expected": 2, "todo": "SQL lower('İ') is 'i' (length 1); JS agrees with Sheets (see docs/behavior-notes.md)"},
+  {"name": "unicode case: UNICODE(RIGHT(LOWER(\"ΑΣ\"))) (checked in Google Sheets 2026-10-29)", "formula": "=UNICODE(RIGHT(LOWER(\"ΑΣ\")))", "expected": 962, "todo": "SQL lower() always gives σ (963); JS agrees with Sheets (see docs/behavior-notes.md)"}
 ]

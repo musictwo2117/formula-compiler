@@ -80,6 +80,16 @@ function checkOptions(formula: string, options: CompileOptions): void {
     const v = options[k];
     if (v !== undefined && (!Number.isInteger(v) || v < (k === "headerRow" ? 0 : 1))) fail("INVALID_OPTION", `${k} must be a positive integer`, 0, 0);
   }
+  if (options.timeZone !== undefined) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: options.timeZone });
+    } catch {
+      fail("INVALID_OPTION", `timeZone "${String(options.timeZone)}" is not an IANA time zone such as "Asia/Bangkok"`, 0, 0);
+    }
+  }
+  if (options.now !== undefined && Number.isNaN(new Date(options.now).getTime())) {
+    fail("INVALID_OPTION", "now must be a valid Date or date text", 0, 0);
+  }
 }
 
 /** Parse only; returns the shared AST. */

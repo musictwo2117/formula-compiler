@@ -2,7 +2,9 @@
  * Spreadsheet dates are serial numbers: days since 1899-12-30, with the time
  * of day as the fraction (Sheets and Excel share this epoch for dates from
  * 1900-03-01 on). Dates are wall-clock values: a field "2024-01-15T10:30" is
- * 10:30 whatever the time zone, matching PostgreSQL's `timestamp`.
+ * 10:30 whatever the time zone, matching PostgreSQL's `timestamp`. A `Date`
+ * is read in the machine's local time, the way `new Date(2024, 0, 15)` and
+ * node-postgres's `timestamp` values are built.
  */
 
 const DAY_MS = 86_400_000;
@@ -10,15 +12,26 @@ const EPOCH_MS = Date.UTC(1899, 11, 30);
 
 const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 
+/** Like Date.UTC, but years 0-99 stay years 0-99 instead of 1900-1999. */
+function utcMs(y: number, mo: number, d: number, h: number, mi: number, s: number, ms: number): number {
+  const date = new Date(0);
+  date.setUTCFullYear(y, mo, d);
+  date.setUTCHours(h, mi, s, ms);
+  return date.getTime();
+}
+
 /** Wall-clock milliseconds (as if UTC) of a field value, or undefined if it is not a date. */
 export function wallClockMs(raw: unknown): number | undefined {
-  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? undefined : raw.getTime();
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return undefined;
+    return utcMs(raw.getFullYear(), raw.getMonth(), raw.getDate(), raw.getHours(), raw.getMinutes(), raw.getSeconds(), raw.getMilliseconds());
+  }
   if (typeof raw !== "string") return undefined;
   const m = DATE_TEXT.exec(raw.trim());
   if (!m) return undefined;
   const [, y, mo, d, h = "0", mi = "0", s = "0", frac = "0"] = m;
   const ms = Number(`0.${frac}`) * 1000;
-  return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), ms);
+  return utcMs(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), ms);
 }
 
 /** Serial number of wall-clock milliseconds. Seconds first, so JS and SQL divide the same doubles. */

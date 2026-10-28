@@ -118,7 +118,7 @@ compile("=[@amount] / SUM(Table1[amount])", { from: "excel", to: "sql", fieldTyp
 ### Dates and lookups (Sheets, Excel)
 
 Dates are serial numbers, as in the spreadsheet (days since 1899-12-30, the time of day as the fraction).
-Give date fields the `date` type: ISO text or a `Date` in JS, a `timestamp` column in SQL.
+Give date fields the `date` type: ISO text or a `Date` (read in local time) in JS, a `timestamp` column in SQL.
 
 ```ts
 const due = compile("=EDATE(B2, 1)", { from: "excel", to: "js", columnMap: { B: "start" }, fieldTypes: { start: "date" } });
@@ -264,6 +264,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
   the header row reads as empty (`INDEX(B:B, 1)` is blank, not the header text).
 - Dates: Sheets/Excel serial dates and 15 date functions; Airtable dates, `NETWORKDAYS`/`WORKDAY`, `WEEKNUM`,
   `DATEVALUE`, `TEXT` and `DATEDIF` units `"MD"`/`"YD"` are not supported yet.
+- Text outside ASCII: case-insensitive comparisons lower-case both sides, so a few letters (`σ`/`ς`, `İ`) differ
+  from Google Sheets and between JS and SQL. See [docs/behavior-notes.md](docs/behavior-notes.md).
 - Not yet: `HLOOKUP`/`LOOKUP`/`XMATCH`/`OFFSET`, `ARRAYFORMULA`, `LAMBDA`, array literals, named ranges,
   omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields.
 - SQL lookups need the `orderBy` option, and their match mode, column index and search mode must be literals.

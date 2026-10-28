@@ -3,6 +3,22 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## 0.2.3 — 2026-10-29
+
+### Fixed
+
+- **A `Date` in a date field is read in local time.** `new Date(2024, 0, 15)` was read as UTC, so in Bangkok
+  `DAY()` of it gave 14; it now gives 15 in every time zone, like the text `"2024-01-15"`. Values from
+  node-postgres `timestamp` columns are built the same way.
+- **Date text and `Date` values before year 100 keep their year.** `"0050-01-15"` was read as 1950.
+- **A bad `timeZone` or `now` option throws `FormulaCompileError`** (code `INVALID_OPTION`) when compiling,
+  instead of a `RangeError` from inside the compiler or the compiled function.
+
+### Notes
+
+- Case-insensitive comparisons of a few non-ASCII letters (`σ`/`ς`, `İ`) differ from Google Sheets, and between
+  JS and SQL. Checked in Sheets and written up in `docs/behavior-notes.md`, with todo cases.
+
 ## 0.2.2 — 2026-10-28
 
 ### Fixed

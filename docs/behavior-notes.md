@@ -16,6 +16,14 @@ a PR (with the program and date) if a program's behaviour changes.
 - Numbers are IEEE doubles on both sides (`double precision` in SQL).
 - Text ordering is by code point (`COLLATE "C"`); spreadsheets lower-case first. The real programs use
   locale-aware ordering for punctuation and accented letters.
+- Case-insensitive text comparisons (`=`, lookups, `COUNTIF`, `SEARCH`) lower-case both sides: `toLowerCase()`
+  in JS, `lower()` in SQL. This matches the real programs for ASCII and most accented letters (`"É"="é"`,
+  `"ß"="ẞ"`). **Not matched** (Google Sheets, checked 2026-10-29; the cases are todo): Sheets folds case, so
+  `"σ"="ς"` is TRUE where both JS and SQL say FALSE; a final `Σ` lower-cases to `ς` in JS but `σ` in SQL; and
+  SQL lower-cases `İ` to `i` (`"İ"="i"` is TRUE, `LEN(LOWER("İ"))` is 1) where Sheets and JS give `i̇`. SQL also
+  follows the database's character type (`LC_CTYPE`), so other databases may differ further.
+- A `Date` in a date field is read in the machine's local time: `new Date(2024, 0, 15)` is 2024-01-15 in any time
+  zone, as node-postgres builds `timestamp` values.
 - Not handled: results that overflow a double. PostgreSQL raises "value out of range" where JS gives
   Infinity.
 

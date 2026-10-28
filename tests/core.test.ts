@@ -90,6 +90,43 @@ describe("errors", () => {
     expect(compileError(() => compile("=1", { from: "excel", to: "js", locale: { decimalSeparator: "," } })).code).toBe("INVALID_OPTION");
     expect(() => compile("1", { from: "lotus" as never, to: "js" })).toThrow(/Unknown source program/);
   });
+
+  it("reports a bad timeZone or now as INVALID_OPTION, not RangeError", () => {
+    for (const to of ["js", "sql"] as const) {
+      const e = compileError(() => compile("=TODAY()", { from: "sheets", to, timeZone: "Asia/Bangkokk" }));
+      expect(e.code).toBe("INVALID_OPTION");
+      expect(e.reason).toMatch(/Asia\/Bangkokk/);
+      expect(compileError(() => compile("=NOW()", { from: "excel", to, now: "not a date" })).code).toBe("INVALID_OPTION");
+    }
+    expect(compile("=TODAY()", { from: "sheets", to: "sql", timeZone: "Asia/Bangkok", now: new Date("2024-01-15T20:00:00Z") }).sql).toBe("floor(45307.125::float8)");
+  });
+});
+
+describe("Date field values", () => {
+  const savedTz = process.env.TZ;
+  afterAll(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
+
+  it("reads a Date in local time, like date text", () => {
+    const f = compile("=B2", { from: "excel", to: "js", columnMap: { B: "d" }, fieldTypes: { d: "date" } });
+    const day = compile("=DAY(B2)", { from: "excel", to: "js", columnMap: { B: "d" }, fieldTypes: { d: "date" } });
+    for (const tz of ["Asia/Bangkok", "America/Los_Angeles", "UTC"]) {
+      process.env.TZ = tz;
+      expect(f.evaluate({ d: new Date(2024, 0, 15, 10, 30) })).toBe(f.evaluate({ d: "2024-01-15T10:30" }));
+      expect(day.evaluate({ d: new Date(2024, 0, 15) })).toBe(15);
+    }
+  });
+
+  it("keeps years before 100 (they were read as 1900-1999)", () => {
+    const d = new Date(2024, 0, 15);
+    d.setFullYear(50);
+    const f = compile("=B2", { from: "sheets", to: "js", columnMap: { B: "d" }, fieldTypes: { d: "date" } });
+    const serial = -675682; // 0050-01-15, as PostgreSQL's timestamp gives it
+    expect(f.evaluate({ d })).toBe(serial);
+    expect(f.evaluate({ d: "0050-01-15" })).toBe(serial);
+  });
 });
 
 describe("security", () => {
