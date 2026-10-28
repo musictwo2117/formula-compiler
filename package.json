@@ -40,7 +40,7 @@
     }
   },
   "bin": {
-    "formula-compiler": "./dist/cli.cjs"
+    "formula-compiler": "dist/cli.cjs"
   },
   "files": [
     "dist",
