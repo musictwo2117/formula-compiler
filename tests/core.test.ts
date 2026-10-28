@@ -103,11 +103,11 @@ describe("security", () => {
 
   const nasty = ['"]); throw new Error("pwned"); (["', "`${process.exit(1)}`", "a b", "x' OR 1=1 --", 'a"b'];
 
-  it("reads fields through record[\"...\"] with escaped names", () => {
+  it("reads fields through record[...] with the name as an escaped string literal", () => {
     for (const name of nasty) {
       const escaped = name.replace(/\\/g, "\\\\").replace(/}/g, "\\}");
       const r = compile(`{${escaped}} & "!"`, { from: "airtable", to: "js" });
-      expect(r.code).toContain(`record[${JSON.stringify(name).replace(" ", "\\u2028")}]`);
+      expect(r.code).toContain(`record[rt.key(record, ${JSON.stringify(name).replace(" ", "\\u2028")})]`);
       expect(r.evaluate({ [name]: "ok" })).toBe("ok!");
     }
   });

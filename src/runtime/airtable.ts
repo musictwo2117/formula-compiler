@@ -12,6 +12,7 @@ import {
   indexOfChars,
   isError,
   jsNumber,
+  matchFieldName,
   normalize,
   substituteText,
   type EvalContext,
@@ -150,6 +151,8 @@ function substring(c: string[], start: number, end = c.length): string {
 
 export const airtableRuntime = {
   v: (raw: unknown, name: string): Value => field(raw, name),
+  /** The record key for a field name, ignoring case like Airtable does. */
+  key: (record: Record<string, unknown>, name: string): string => (name in record ? name : matchFieldName(name, Object.keys(record))),
   f: field,
   err: (code: string): Value => new FormulaError(code),
   result: (x: Value): Value => x,

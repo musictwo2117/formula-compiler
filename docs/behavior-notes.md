@@ -24,6 +24,9 @@ a PR (with the program and date) if a program's behaviour changes.
 Airtable behaves much like JavaScript.
 
 **Syntax**
+- Field names are case-insensitive: `{NUM5}` and `NUM5` find the field `num5` (the exact spelling wins
+  when both exist). formula-compiler matches against `fieldTypes` at compile time and the record's keys at
+  run time.
 - `{Field name}` with `\}` and `\\` escapes; a bare word such as `num5` is also a field name (so `TRUE`
   without `()` is the field "TRUE" — Airtable says "Unknown field names: true").
 - Strings `"…"` or `'…'` with backslash escapes. Not-equal is `!=`; `<>` is an invalid formula.
@@ -76,8 +79,6 @@ Airtable behaves much like JavaScript.
 - `TRIM` strips whitespace at both ends (including newlines) and keeps inner runs of spaces.
 
 **Known gaps**
-- Field names are case-insensitive in Airtable (`{NUM5}` finds `num5`); formula-compiler reads
-  `record["NUM5"]` exactly as written.
 - In JS, pass `fieldTypes` so an empty text field is `""` (needed for the `*` / `/` rule); without it an
   empty field is treated as an empty number.
 - `Number()` hex/binary forms (`"0x10"`) are not supported.

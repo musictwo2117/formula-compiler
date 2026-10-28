@@ -7,6 +7,7 @@
 import type { BoundCall, BoundNode } from "../core/ast";
 import { registry } from "../core/registry";
 import type { Dialect, FieldType } from "../core/types";
+import { matchFieldName } from "../runtime/common";
 
 export function jsString(s: string): string {
   // U+2028/U+2029 are valid in JSON but were line terminators in older JS.
@@ -33,8 +34,13 @@ export class JsGen {
       case "error":
         return `rt.err(${jsString(n.code)})`;
       case "field": {
-        const type = this.fieldTypes[n.name];
-        if (this.dialect === "airtable" && type) return `rt.f(record[${jsString(n.name)}], ${jsString(n.name)}, ${jsString(type)})`;
+        if (this.dialect === "airtable") {
+          // Airtable field names are case-insensitive: resolve against fieldTypes, then the record's keys.
+          const name = matchFieldName(n.name, Object.keys(this.fieldTypes));
+          const key = `record[rt.key(record, ${jsString(name)})]`;
+          const type = this.fieldTypes[name];
+          return type ? `rt.f(${key}, ${jsString(name)}, ${jsString(type)})` : `rt.v(${key}, ${jsString(name)})`;
+        }
         return `rt.v(record[${jsString(n.name)}], ${jsString(n.name)})`;
       }
       case "column":

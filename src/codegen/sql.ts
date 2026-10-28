@@ -13,7 +13,7 @@ import type { BinaryOperator, BoundCall, BoundNode, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { CompileOptions, Dialect, FieldType } from "../core/types";
-import { EXCEL_NUMBER_TEXT_SQL, JS_NUMBER_TEXT_SQL, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, excelNumber, jsNumber, sheetsNumber } from "../runtime/common";
+import { EXCEL_NUMBER_TEXT_SQL, JS_NUMBER_TEXT_SQL, NUMERIC_TEXT_SQL, SHEETS_NUMBER_TEXT_SQL, excelNumber, jsNumber, matchFieldName, sheetsNumber } from "../runtime/common";
 
 export type SqlType = "number" | "text" | "boolean" | "blank" | "any";
 
@@ -491,8 +491,10 @@ export class SqlGen {
       case "boolean": return this.boolean(n.value);
       case "error": return this.error(n.code);
       case "field": {
-        const t = this.fieldType(n.name, n);
-        const ref = this.fieldRef(n.name);
+        // Airtable field names are case-insensitive: use the spelling from fieldTypes as the column.
+        const name = this.dialect === "airtable" ? matchFieldName(n.name, Object.keys(this.options.fieldTypes ?? {})) : n.name;
+        const t = this.fieldType(name, n);
+        const ref = this.fieldRef(name);
         if (this.dialect === "airtable") {
           // Airtable: an empty text field is "", an unchecked checkbox is blank.
           if (t === "text") return { v: `COALESCE(${ref}, '')`, t, err: null, nullable: false };

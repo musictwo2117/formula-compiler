@@ -42,6 +42,20 @@ export function normalize(raw: unknown, field: string): Value {
   throw new TypeError(`Field "${field}" holds a ${Array.isArray(raw) ? "list" : typeof raw}; only numbers, text, booleans and null are supported`);
 }
 
+/**
+ * Airtable field names are case-insensitive ({NUM5} finds "num5"): the exact name wins, otherwise the
+ * first name that matches ignoring case, otherwise the name as written.
+ */
+export function matchFieldName(name: string, known: Iterable<string>): string {
+  const lower = name.toLowerCase();
+  let found: string | undefined;
+  for (const k of known) {
+    if (k === name) return k;
+    if (found === undefined && k.toLowerCase() === lower) found = k;
+  }
+  return found ?? name;
+}
+
 export function column(ctx: EvalContext | undefined, field: string): RefArg {
   if (!ctx?.rows) throw new TypeError(`The formula uses a whole-column range of "${field}"; pass ctx.rows`);
   return { ref: true, values: ctx.rows.map((r) => normalize(r[field], field)) };
