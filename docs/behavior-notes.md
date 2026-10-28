@@ -124,6 +124,10 @@ Airtable behaves much like JavaScript.
   1900 to years 0-1899 (`DATE(99,1,1)` = 1999, `DATE(1899,12,31)` = 3799-12-31); years below 0 or from
   10000 are `#NUM!`. `DATE(1900,1,1)` = 2; serial 0 is 1899-12-30.
 - Date text in ISO form is a date (`YEAR("2024-01-15")` = 2024); impossible dates (`"2024-02-30"`) are not.
+- Sheets has no 9999-12-31 limit: `DATE(9999,12,32)` = 10000-01-01 and `YEAR` of it is 10000. Results below
+  serial 0 are `#NUM!` (`EDATE(0,-1)`, `EOMONTH(0,-2)`, `DATE(2024,1,-1E9)`). **Not matched:** formula-compiler
+  stops at 99999-12-31 and gives `#NUM!` after it, while Sheets still gives a number (`DATE(2024,1,1E9)` =
+  1000045291; months beyond 2^31 seem to be capped, `DATE(2024,1E10,1)` = 65362736589). These cases are todo.
 - `EDATE` / `EOMONTH` clamp to the month's end; `WEEKDAY` types 1, 2, 3 and 11-17; `HOUR` / `MINUTE` /
   `SECOND` round to the nearest second; `DATEDIF` with `"D"`, `"M"`, `"Y"`, `"YM"`.
 - `TODAY()` / `NOW()` use the `timeZone` option (default UTC).
@@ -167,5 +171,20 @@ Airtable behaves much like JavaScript.
 - `DATE` counts through the fake day (`DATE(1900,3,0)` = 60, `DATE(1900,2,30)` = 61), but `EDATE` / `EOMONTH`
   use the real calendar (`EDATE(DATE(1900,1,31),1)` = 59, `EDATE(60,12)` = 1901-02-28) and give `#NUM!`
   for results before serial 1.
+- Excel stops at 9999-12-31 (serial 2958465): `DATE(9999,12,32)`, `EDATE(DATE(9999,12,1),1)` and
+  `YEAR(2958466)` are `#NUM!`.
+- `DATE` keeps month and day in 16 bits: a month outside -32767 to 32766 is `#NUM!` (`DATE(2024,32766,1)` =
+  1042555 but `DATE(2024,32767,1)` is `#NUM!`), and a day outside -32768 to 32767 counts as 32767
+  (`DATE(2024,1,1E9)` = `DATE(2024,1,-1E9)` = `DATE(2024,1,32767)` = 78058). `EDATE` has no such limit
+  (`EDATE(45000,90000)` = 2784318).
 - Lookups behave like Sheets (all 25 lookup probes gave the same answers).
+
+### Lookups in SQL
+
+- Rows are ordered by the `orderBy` field, which must be unique and not null (ties would make "the first
+  match" and `INDEX` rows depend on PostgreSQL's plan). JS uses the order of `ctx.rows`.
+- `VLOOKUP` / `XLOOKUP` / exact `MATCH` on a number or boolean column can use a PostgreSQL index on that column
+  (text keys compare `lower(col) COLLATE "C"`, so they need an index on that expression).
+- `MATCH` positions and `INDEX` rows count the rows before the match (`count(*)` / `OFFSET`), so they cost time
+  in proportion to the row number; on large tables prefer `XLOOKUP` / `VLOOKUP`.
 

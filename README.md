@@ -48,7 +48,7 @@ compile(formula, { from: "airtable" | "sheets" | "excel", to: "js" | "sql" | "as
 | `locale` | Sheets, Excel | `{ argumentSeparator: ";", decimalSeparator: "," }` for `=ROUND(1,5;0)`. |
 | `fieldTypes` | SQL target | `{ income: "number", name: "text", ok: "boolean", due: "date" }` — required for every referenced field. Sheets/Excel `date` fields (`"2024-01-15"`, `"2024-01-15T10:30"` or a `Date`; a `timestamp` column in SQL) become serial numbers. |
 | `table` / `tableAlias` | SQL target | Table that whole-column ranges (`A:A`) aggregate over, and the alias of the outer row. |
-| `orderBy` | SQL target | Field that gives the row order (row 1, row 2, …) for `VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX`. JS uses the order of `ctx.rows`. |
+| `orderBy` | SQL target | Field that gives the row order (row 1, row 2, …) for `VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX`; it must be unique and not null. JS uses the order of `ctx.rows`. |
 | `timeZone` / `now` | Sheets, Excel | Time zone for `TODAY()` / `NOW()` (IANA name, default `"UTC"`), and a fixed "now" for SQL (JS reads `ctx.now`). |
 
 ### JavaScript
@@ -233,6 +233,9 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - Not yet: `HLOOKUP`/`LOOKUP`/`XMATCH`/`OFFSET`, `ARRAYFORMULA`, `LAMBDA`, array literals, named ranges,
   omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields.
 - SQL lookups need the `orderBy` option, and their match mode, column index and search mode must be literals.
+  An index on the lookup column makes `VLOOKUP` / `XLOOKUP` fast; `MATCH` and `INDEX` positions cost time in
+  proportion to the row number.
+- Google Sheets dates after 99999-12-31 are `#NUM!` here; Sheets still gives a number.
 - SQL: literal `COUNTIF`/`SUMIF` criteria (`">5"`, `"a*"`) compile to plain SQL; computed ones (`">"&C2`)
   are parsed per row by PostgreSQL, which gives a much longer expression. Very large numbers can overflow `double precision` and raise a PostgreSQL error. The SQL repeats
   sub-expressions, so it grows quickly with deep nesting of error-producing expressions.

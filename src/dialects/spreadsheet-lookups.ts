@@ -1,7 +1,9 @@
 /**
  * VLOOKUP / XLOOKUP / MATCH / INDEX for Sheets and Excel. In SQL every lookup
- * is a subquery over the table numbered by the `orderBy` field, so "first
- * match" and "row n" mean the same as in JS (ctx.rows order).
+ * is a subquery over the table in `orderBy` order, so "first match" and
+ * "row n" mean the same as in JS (ctx.rows order). orderBy must be unique and
+ * not null. The subqueries sort by orderBy rather than numbering the rows
+ * with a window, which PostgreSQL would redo for every outer row.
  */
 import type { BoundCall, BoundNode, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
@@ -14,37 +16,42 @@ import { likePatternSql } from "./spreadsheet-functions";
 
 type Range = BoundNode & ({ kind: "column" } | { kind: "table" });
 const R = quoteIdent("__fc_r");
-const N = `${R}.${quoteIdent("__fc_n")}`;
 
-/** The table numbered 1, 2, … by the orderBy field, plus typed access to its columns. */
-function rowSource(g: SqlGen, names: string[], span: Span) {
+/** The table (rows in orderBy order), plus typed access to its columns. */
+function rowSource(g: SqlGen, span: Span) {
   const { table, orderBy } = g.options;
   if (!table) return g.fail("INVALID_OPTION", "Lookups need the SQL table name: pass the table option", span.start, span.end);
   if (!orderBy) {
     return g.fail("INVALID_OPTION", "Lookups need the row order in SQL: pass orderBy (a field that numbers the rows)", span.start, span.end);
   }
-  const cols = [...new Set([...names, orderBy])].map(quoteIdent).join(", ");
-  const from = `(SELECT ${cols}, row_number() OVER (ORDER BY ${quoteIdent(orderBy)}) AS "__fc_n" FROM ${quoteIdent(table)}) AS ${R}`;
+  const from = `${quoteIdent(table)} AS ${R}`;
+  const order = `${R}.${quoteIdent(orderBy)}`;
   const col = (name: string): { v: string; t: FieldType } => {
     const t = g.fieldType(name, span);
     const ref = `${R}.${quoteIdent(name)}`;
     return t === "date" ? { v: g.dateFieldSerial(ref), t: "number" } : { v: ref, t };
   };
-  return { from, col };
+  /** Sheet row of the row whose orderBy value is `key`: rows before it, plus the header rows, plus one. */
+  const position = (key: string, headerRow: number) =>
+    `(SELECT (count(*) + ${headerRow + 1})::float8 FROM ${quoteIdent(table)} AS "__fc_p" WHERE "__fc_p".${quoteIdent(orderBy)} < ${key})`;
+  return { from, order, col, position };
 }
 
-/** SQL condition: does the cell `col` (of type t) match the key arm in this mode? Mirrors findIndex(). */
+/**
+ * SQL condition: does the cell `col` (of type t) match the key arm in this mode? Mirrors findIndex().
+ * Only used in WHERE, where NULL means no match, so the bare comparison can use an index on the column.
+ */
 function matchSql(col: string, t: FieldType, k: KindArm, mode: MatchMode): string {
   if (k.k === "blank" || k.k !== (t === "date" ? "number" : t)) return "FALSE";
   const op = mode === "le" ? "<=" : mode === "ge" ? ">=" : "=";
-  if (k.k !== "text") return `COALESCE(${col} ${op} ${k.e}, FALSE)`;
-  if (mode === "wildcard") return `COALESCE(lower(${col}) LIKE ${likePatternSql(`lower(${k.e})`)} ESCAPE ${quoteText("\\")}, FALSE)`;
-  return `COALESCE(lower(${col}) COLLATE "C" ${op} lower(${k.e}) COLLATE "C", FALSE)`;
+  if (k.k !== "text") return `${col} ${op} ${k.e}`;
+  if (mode === "wildcard") return `lower(${col}) LIKE ${likePatternSql(`lower(${k.e})`)} ESCAPE ${quoteText("\\")}`;
+  return `lower(${col}) COLLATE "C" ${op} lower(${k.e}) COLLATE "C"`;
 }
 
-/** ORDER BY that picks the row findIndex() picks. */
-function orderSql(col: string, t: FieldType, mode: MatchMode, fromEnd: boolean): string {
-  const n = `${N} ${fromEnd ? "DESC" : "ASC"}`;
+/** ORDER BY that picks the row findIndex() picks (`order` is the orderBy column). */
+function orderSql(col: string, t: FieldType, order: string, mode: MatchMode, fromEnd: boolean): string {
+  const n = `${order} ${fromEnd ? "DESC" : "ASC"}`;
   if (mode === "exact" || mode === "wildcard") return n;
   const key = t === "text" ? `lower(${col}) COLLATE "C"` : col;
   return `${key} ${mode === "le" ? "DESC" : "ASC"}, ${n}`;
@@ -65,14 +72,15 @@ function literalNumber(c: BoundCall, i: number, fallback: number, g: SqlGen): nu
  * The key is compared per runtime kind (like the JS runtime).
  */
 function lookupSql(g: SqlGen, key: SqlVal, range: { names: string[]; span: Span }, lookupName: string, retName: string, mode: MatchMode, fromEnd: boolean) {
-  const src = rowSource(g, range.names, range.span);
+  const src = rowSource(g, range.span);
   const look = src.col(lookupName);
   const ret = src.col(retName);
   const cond = g.dispatch(key, (k) => ({ v: matchSql(look.v, look.t, k, mode), err: null })).v;
-  const found: SqlVal = { v: `(SELECT ${ret.v} FROM ${src.from} WHERE ${cond} ORDER BY ${orderSql(look.v, look.t, mode, fromEnd)} LIMIT 1)`, t: ret.t === "date" ? "number" : ret.t, err: key.err, nullable: true };
+  const pick = (what: string) => `(SELECT ${what} FROM ${src.from} WHERE ${cond} ORDER BY ${orderSql(look.v, look.t, src.order, mode, fromEnd)} LIMIT 1)`;
+  const found: SqlVal = { v: pick(ret.v), t: ret.t === "date" ? "number" : ret.t, err: key.err, nullable: true };
   // The key's own error wins over "not found".
   const exists: SqlVal = { v: `EXISTS (SELECT 1 FROM ${src.from} WHERE ${cond})`, t: "boolean", err: key.err, nullable: false };
-  return { found, exists, src, look };
+  return { found, exists, src, pick };
 }
 
 const namesOf = (r: Range): string[] => (r.kind === "column" ? [r.name] : r.names);
@@ -149,14 +157,8 @@ export function registerSpreadsheetLookups(variant: SpreadsheetVariant): void {
       const col = c.args[1] as Range & { kind: "column" };
       const t = Math.trunc(literalNumber(c, 2, 1, g));
       const mode: MatchMode = t === 0 ? "wildcard" : t > 0 ? "le" : "ge";
-      const { exists, src, look } = lookupSql(g, key, { names: [col.name], span: col }, col.name, col.name, mode, t !== 0);
-      const cond = g.dispatch(key, (k) => ({ v: matchSql(look.v, look.t, k, mode), err: null })).v;
-      const position: SqlVal = {
-        v: `(SELECT (${N} + ${headerRow(g)})::float8 FROM ${src.from} WHERE ${cond} ORDER BY ${orderSql(look.v, look.t, mode, t !== 0)} LIMIT 1)`,
-        t: "number",
-        err: key.err,
-        nullable: false,
-      };
+      const { exists, src, pick } = lookupSql(g, key, { names: [col.name], span: col }, col.name, col.name, mode, t !== 0);
+      const position: SqlVal = { v: src.position(pick(src.order), headerRow(g)), t: "number", err: key.err, nullable: false };
       return g.chain([{ cond: exists, then: position }], g.error("#N/A"));
     },
   });
@@ -177,9 +179,11 @@ export function registerSpreadsheetLookups(variant: SpreadsheetVariant): void {
       const ci = Math.trunc(literalNumber(c, 2, 1, g));
       if (ci < 1) return g.error("#VALUE!");
       if (ci > names.length) return g.error("#REF!");
-      const src = rowSource(g, names, range);
+      const src = rowSource(g, range);
       const ret = src.col(names[ci - 1]!);
-      const v = `(SELECT ${ret.v} FROM ${src.from} WHERE ${N} = trunc(${row.v}) - ${headerRow(g)})`;
+      // Data row k (1-based) is OFFSET k - 1; header rows and rows past the end are blank.
+      const k = `(trunc(${row.v}) - ${headerRow(g)})`;
+      const v = `CASE WHEN ${k} >= 1 THEN (SELECT ${ret.v} FROM ${src.from} ORDER BY ${src.order} OFFSET LEAST(${k} - 1, 1e15)::bigint LIMIT 1) END`;
       return g.make(ret.t as SqlVal["t"], v, [row.err, `CASE WHEN trunc(${row.v}) < 1 THEN '#VALUE!' END`], true);
     },
   });

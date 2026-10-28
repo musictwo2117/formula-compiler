@@ -102,9 +102,30 @@ export function calendarParts(serial: number, system: DateSystem): { y: number; 
   return serialParts(s);
 }
 
+/**
+ * Largest serial each program handles here: Excel stops at 9999-12-31. Google Sheets goes further
+ * (DATE(9999,12,32) is 10000-01-01), so its limit is 99999-12-31, the end of five-digit years;
+ * later dates are #NUM! here although Sheets still gives a number.
+ */
+export const MAX_SERIAL: Record<DateSystem, number> = { excel: 2958465, sheets: 35830290 };
+
+/** Months since January of year 0 that the date functions compute with (just past both limits). */
+export const MONTH_LIMIT = 100000 * 12;
+
+/**
+ * Real-calendar serial of the first day of a month counted from January of year 0. Counts outside
+ * [-1, MONTH_LIMIT] are clamped: the result is then out of range anyway, and the date arithmetic
+ * stays within what Date (and PostgreSQL) can hold.
+ */
+export function monthStartSerial(months: number): number {
+  const t = Math.min(Math.max(Math.trunc(months), -1), MONTH_LIMIT);
+  const y = Math.floor(t / 12);
+  return ymdToSerial(y, t - 12 * y + 1, 1);
+}
+
 /** DATE(y, m, d): the month's first day in the program's calendar, plus d - 1 days (months may overflow). */
 export function calendarDate(y: number, m: number, d: number, system: DateSystem): number {
-  return fromRealSerial(ymdToSerial(y, m, 1), system) + d - 1;
+  return fromRealSerial(monthStartSerial(y * 12 + m - 1), system) + d - 1;
 }
 
 /** Day of the week (0 = Sunday) follows the serial number in both programs. */

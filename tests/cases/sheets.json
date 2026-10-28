@@ -147,5 +147,19 @@
   {"name": "missing closing paren", "formula": "=SUM(1, 2", "error": {"code": "SYNTAX", "start": 9}},
   {"name": "unmatched )", "formula": "=1)", "error": {"code": "SYNTAX", "start": 2}},
   {"name": "unknown error literal", "formula": "=#OOPS", "error": {"code": "SYNTAX", "start": 1}},
-  {"name": "DATEDIF MD is not supported yet", "formula": "=DATEDIF(1,2,\"MD\")", "error": {"code": "UNSUPPORTED_FEATURE", "functionName": "DATEDIF"}}
+  {"name": "DATEDIF MD is not supported yet", "formula": "=DATEDIF(1,2,\"MD\")", "error": {"code": "UNSUPPORTED_FEATURE", "functionName": "DATEDIF"}},
+  {"name": "date range: DATE(9999,12,32) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(9999,12,32)", "expected": 2958466},
+  {"name": "date range: EDATE(DATE(9999,12,1),1) (checked in Google Sheets 2026-10-28)", "formula": "=EDATE(DATE(9999,12,1),1)", "expected": 2958466},
+  {"name": "date range: YEAR(DATE(9999,12,31)+1) (checked in Google Sheets 2026-10-28)", "formula": "=YEAR(DATE(9999,12,31)+1)", "expected": 10000},
+  {"name": "date range: YEAR(DATE(1899,13,1)) (checked in Google Sheets 2026-10-28)", "formula": "=YEAR(DATE(1899,13,1))", "expected": 3800},
+  {"name": "date range: DATE(2024,-1E7,1) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,-1E7,1)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: DATE(2024,1,-1E9) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1,-1E9)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: DATE(0,1,-1000) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(0,1,-1000)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: EDATE(0,-1) (checked in Google Sheets 2026-10-28)", "formula": "=EDATE(0,-1)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: EOMONTH(0,-2) (checked in Google Sheets 2026-10-28)", "formula": "=EOMONTH(0,-2)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: EDATE(-1,0) (checked in Google Sheets 2026-10-28)", "formula": "=EDATE(-1,0)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: EOMONTH(DATE(2024,1,31),-1E7) (checked in Google Sheets 2026-10-28)", "formula": "=EOMONTH(DATE(2024,1,31),-1E7)", "expected": {"error": "#NUM!"}},
+  {"name": "date range: DATE(2024,1,1E9) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1,1E9)", "expected": 1000045291, "todo": "Sheets gives 1000045291; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"},
+  {"name": "date range: EDATE(DATE(2024,1,31),1E7) (checked in Google Sheets 2026-10-28)", "formula": "=EDATE(DATE(2024,1,31),1E7)", "expected": 304414071, "todo": "Sheets gives 304414071; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"},
+  {"name": "date range: DATE(2024,1E10,1) (checked in Google Sheets 2026-10-28)", "formula": "=DATE(2024,1E10,1)", "expected": 65362736589, "todo": "Sheets gives 65362736589; dates after 99999-12-31 are #NUM! here (see docs/behavior-notes.md)"}
 ]

@@ -7,22 +7,22 @@ import type { BoundCall } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { jsString } from "../codegen/js";
 import { errorIf, quoteText, sqlNumber, sqlTimestampSerial, type SqlGen, type SqlVal } from "../codegen/sql";
-import { nowSerial } from "../runtime/dates";
+import { MAX_SERIAL, MONTH_LIMIT, nowSerial } from "../runtime/dates";
 import type { SpreadsheetVariant } from "../runtime/spreadsheet";
 import { definer, sqlArgs } from "./shared";
 
 const D0 = "DATE '1899-12-30'";
-/** Largest serial Excel accepts (9999-12-31). */
-const MAX_SERIAL = 2958465;
 
-/** Whole days of a serial, clamped to the valid range, as an int. */
-const wholeDays = (s: string) => `LEAST(GREATEST(floor(${s}), 0), ${MAX_SERIAL})::int`;
 /** Serial of an SQL date expression in the real calendar. */
 const serialOf = (d: string) => `((${d}) - ${D0})::float8`;
-const badSerial = (s: string) => errorIf(`${s} < 0 OR ${s} > ${MAX_SERIAL}`, "#NUM!");
 /** Seconds of the time of day, rounded to the nearest second. */
 const secondsOf = (s: string) => `floor((${s} - floor(${s})) * 86400 + 0.5)`;
-const clampInt = (x: string, lim: number) => `LEAST(GREATEST(trunc(${x}), ${-lim}), ${lim})::int`;
+/**
+ * First day of a month counted from January of year 0, as an SQL date in the real calendar. The
+ * count is clamped like monthStartSerial() in src/runtime/dates.ts, so the date stays within
+ * PostgreSQL's range (it would otherwise fail the whole query) and agrees with JS.
+ */
+const monthStart = (months: string) => `(DATE '2000-01-01' + make_interval(months => (LEAST(GREATEST(trunc(${months}), -1), ${MONTH_LIMIT}) - 24000)::int))::date`;
 
 function nowSql(g: SqlGen): string {
   const tz = g.options.timeZone ?? "UTC";
@@ -38,6 +38,10 @@ const WEEKDAY_START: Record<number, number> = { 1: 7, 2: 1, 3: 1, 11: 1, 12: 2, 
 export function registerSpreadsheetDates(variant: SpreadsheetVariant): void {
   const def = definer(variant);
   const excel = variant === "excel";
+  const max = MAX_SERIAL[variant];
+  /** Whole days of a serial, clamped to the valid range, as an int. */
+  const wholeDays = (s: string) => `LEAST(GREATEST(floor(${s}), 0), ${max})::int`;
+  const badSerial = (s: string) => errorIf(`${s} < 0 OR ${s} > ${max}`, "#NUM!");
   /** Real-calendar serial → the program's serial (Excel is one day less before 1900-03-01). See dates.ts. */
   const fromReal = (t: string) => (excel ? `CASE WHEN ${t} < 61 THEN ${t} - 1 ELSE ${t} END` : t);
   /** YEAR / MONTH / DAY of a serial in the program's calendar (Excel: serial 0 is 1900-01-00, 60 is 1900-02-29). */
@@ -47,13 +51,13 @@ export function registerSpreadsheetDates(variant: SpreadsheetVariant): void {
     const fixed = { YEAR: [1900, 1900], MONTH: [1, 2], DAY: [0, 29] }[field];
     return `CASE ${n} WHEN 0 THEN ${fixed[0]}::float8 WHEN 60 THEN ${fixed[1]}::float8 ELSE EXTRACT(${field} FROM ${D0} + CASE WHEN ${n} < 61 THEN ${n} + 1 ELSE ${n} END)::float8 END`;
   };
-  /** First day of month (m + k) of year y, as an SQL date in the real calendar. */
-  const monthStart = (y: string, monthsFromJan: string) => `(make_date(LEAST(GREATEST(${y}, 1), 9999)::int, 1, 1) + make_interval(months => ${clampInt(monthsFromJan, 1_000_000)}))::date`;
-  /** EDATE / EOMONTH results: real-calendar dates; Excel rejects anything before serial 1. */
-  const realResult = (date: string, errs: (string | null)[]): SqlVal => {
-    const s = fromReal(serialOf(date));
-    const errors = [...errs, excel ? errorIf(`${s} < 1`, "#NUM!") : null].filter((e): e is string => e !== null);
-    return { v: s, t: "number", nullable: false, err: errors.length ? `COALESCE(${errors.join(", ")})` : null };
+  /** Months since January of year 0 for the month of serial s plus k months. */
+  const monthsOf = (s: string, k: string) => `(${part("YEAR", s)} * 12 + ${part("MONTH", s)} - 1 + trunc(${k}))`;
+  /** EDATE / EOMONTH results: a real-calendar serial; Excel rejects anything before serial 1. */
+  const realResult = (real: string, errs: (string | null)[]): SqlVal => {
+    const s = fromReal(real);
+    const errors = [...errs, errorIf(`${s} < ${excel ? 1 : 0} OR ${s} > ${max}`, "#NUM!")].filter((e): e is string => e !== null);
+    return { v: s, t: "number", nullable: false, err: `COALESCE(${errors.join(", ")})` };
   };
   const jsCall = (name: string) => (c: BoundCall, g: import("../codegen/js").JsGen) => g.call(name, c.args.map((a) => g.expr(a)));
 
@@ -83,9 +87,16 @@ export function registerSpreadsheetDates(variant: SpreadsheetVariant): void {
     sql: (c, g) => {
       const [y, m, d] = nums(c, g) as [SqlVal, SqlVal, SqlVal];
       const year = `CASE WHEN trunc(${y.v}) < 1900 THEN trunc(${y.v}) + 1900 ELSE trunc(${y.v}) END`;
+      // Excel keeps month and day in 16 bits; see DATE in src/runtime/spreadsheet-dates.ts.
+      const day = excel ? `CASE WHEN trunc(${d.v}) < -32768 OR trunc(${d.v}) > 32767 THEN 32767 ELSE trunc(${d.v}) END` : `trunc(${d.v})`;
       // The month's first day in the program's calendar, then count days (Excel passes its 1900-02-29).
-      const serial = `(${fromReal(serialOf(monthStart(year, `${m.v} - 1`)))} + ${clampInt(`${d.v} - 1`, 10_000_000)})`;
-      return g.make("number", serial, [y.err, m.err, d.err, errorIf(`trunc(${y.v}) < 0 OR trunc(${y.v}) >= 10000`, "#NUM!"), errorIf(`${serial} < 0`, "#NUM!")]);
+      const serial = `(${fromReal(serialOf(monthStart(`${year} * 12 + trunc(${m.v}) - 1`)))} + ${day} - 1)`;
+      return g.make("number", serial, [
+        y.err, m.err, d.err,
+        errorIf(`trunc(${y.v}) < 0 OR trunc(${y.v}) >= 10000`, "#NUM!"),
+        excel ? errorIf(`trunc(${m.v}) < -32767 OR trunc(${m.v}) > 32766`, "#NUM!") : null,
+        errorIf(`${serial} < 0 OR ${serial} > ${max}`, "#NUM!"),
+      ]);
     },
   });
 
@@ -164,10 +175,10 @@ export function registerSpreadsheetDates(variant: SpreadsheetVariant): void {
     sql: (c, g) => {
       const [s, k] = nums(c, g) as [SqlVal, SqlVal];
       // Day d of month m + k in the real calendar, clamped to that month's length.
-      const first = monthStart(part("YEAR", s.v), `${part("MONTH", s.v)} - 1 + ${k.v}`);
-      const length = `EXTRACT(DAY FROM (${first} + interval '1 month' - interval '1 day'))`;
-      const date = `(${first} + (LEAST(${part("DAY", s.v)}, ${length}) - 1)::int)`;
-      return realResult(date, [s.err, k.err, badSerial(s.v)]);
+      const t = monthsOf(s.v, k.v);
+      const first = serialOf(monthStart(t));
+      const length = `(${serialOf(monthStart(`${t} + 1`))} - ${first})`;
+      return realResult(`(${first} + LEAST(${part("DAY", s.v)}, ${length}) - 1)`, [s.err, k.err, badSerial(s.v)]);
     },
   });
   def({
@@ -178,8 +189,7 @@ export function registerSpreadsheetDates(variant: SpreadsheetVariant): void {
     js: jsCall("EOMONTH"),
     sql: (c, g) => {
       const [s, k] = nums(c, g) as [SqlVal, SqlVal];
-      const date = `(${monthStart(part("YEAR", s.v), `${part("MONTH", s.v)} + ${k.v}`)} - 1)`;
-      return realResult(date, [s.err, k.err, badSerial(s.v)]);
+      return realResult(`(${serialOf(monthStart(`${monthsOf(s.v, k.v)} + 1`))} - 1)`, [s.err, k.err, badSerial(s.v)]);
     },
   });
 

@@ -3,9 +3,8 @@
  * has the SQL). Dates are serial numbers; see src/runtime/dates.ts.
  */
 import { FormulaError, isError, type EvalContext, type Value } from "./common";
-import { calendarDate, calendarParts, fromRealSerial, nowSerial, serialParts, serialWeekday, ymdToSerial, type DateSystem } from "./dates";
+import { calendarDate, calendarParts, fromRealSerial, MAX_SERIAL, monthStartSerial, nowSerial, serialWeekday, type DateSystem } from "./dates";
 
-const MAX_SERIAL = 2958465;
 const num = (msg: string) => new FormulaError(msg);
 
 type ToNumber = (x: Value) => number | FormulaError;
@@ -15,10 +14,17 @@ const WEEKDAY_START: Record<number, number> = { 1: 7, 2: 1, 3: 1, 11: 1, 12: 2, 
 
 export function spreadsheetDateFunctions(N: ToNumber, X: ToText, system: DateSystem) {
   const parts = (s: number) => calendarParts(s, system);
+  const max = MAX_SERIAL[system];
+  const excel = system === "excel";
   /** A date computed in the real calendar (EDATE, EOMONTH), as a serial; Excel rejects anything before serial 1. */
-  const realResult = (y: number, m: number, d: number): Value => {
-    const s = fromRealSerial(ymdToSerial(y, m, d), system);
-    return system === "excel" && s < 1 ? num("#NUM!") : s;
+  const realResult = (real: number): Value => {
+    const s = fromRealSerial(real, system);
+    return s < (excel ? 1 : 0) || s > max ? num("#NUM!") : s;
+  };
+  /** Months since January of year 0 for a serial's month plus k months. */
+  const monthsOf = (s: number, k: number) => {
+    const { y, m } = parts(s);
+    return y * 12 + m - 1 + Math.trunc(k);
   };
   /** Numbers for all arguments, or the first error. */
   const nums = (...xs: Value[]): number[] | FormulaError => {
@@ -35,7 +41,7 @@ export function spreadsheetDateFunctions(N: ToNumber, X: ToText, system: DateSys
     const n = nums(x, ...more);
     if (isError(n)) return n;
     const [s, ...rest] = n as [number, ...number[]];
-    return s < 0 || s > MAX_SERIAL ? num("#NUM!") : f(s, ...rest);
+    return s < 0 || s > max ? num("#NUM!") : f(s, ...rest);
   };
   const seconds = (s: number) => Math.floor((s - Math.floor(s)) * 86400 + 0.5);
   const months = (s: number, e: number) => {
@@ -50,10 +56,15 @@ export function spreadsheetDateFunctions(N: ToNumber, X: ToText, system: DateSys
       const n = nums(y, m, d);
       if (isError(n)) return n;
       let year = Math.trunc(n[0]!);
+      const [month, day] = [Math.trunc(n[1]!), Math.trunc(n[2]!)];
       if (year < 0 || year >= 10000) return num("#NUM!");
       if (year < 1900) year += 1900;
-      const s = calendarDate(year, Math.trunc(n[1]!), Math.trunc(n[2]!), system);
-      return s < 0 ? num("#NUM!") : s;
+      // Excel keeps month and day in 16 bits: months outside [-32767, 32766] are #NUM!, and days
+      // outside [-32768, 32767] count as 32767 (checked in Excel for the web).
+      if (excel && (month < -32767 || month > 32766)) return num("#NUM!");
+      const days = excel && (day < -32768 || day > 32767) ? 32767 : day;
+      const s = calendarDate(year, month, days, system);
+      return s < 0 || s > max ? num("#NUM!") : s;
     },
     TIME(h: Value, m: Value, s: Value): Value {
       const n = nums(h, m, s);
@@ -78,17 +89,14 @@ export function spreadsheetDateFunctions(N: ToNumber, X: ToText, system: DateSys
     },
     EDATE(x: Value, k: Value): Value {
       return serial(x, (s, n) => {
-        const { y, m, d } = parts(s);
-        const target = m + Math.trunc(n!);
-        const last = serialParts(ymdToSerial(y, target + 1, 0)).d;
-        return realResult(y, target, Math.min(d, last));
+        const t = monthsOf(s, n!);
+        const first = monthStartSerial(t);
+        const length = monthStartSerial(t + 1) - first;
+        return realResult(first + Math.min(parts(s).d, length) - 1);
       }, k);
     },
     EOMONTH(x: Value, k: Value): Value {
-      return serial(x, (s, n) => {
-        const { y, m } = parts(s);
-        return realResult(y, m + Math.trunc(n!) + 1, 0);
-      }, k);
+      return serial(x, (s, n) => realResult(monthStartSerial(monthsOf(s, n!) + 1) - 1), k);
     },
     DAYS(e: Value, s: Value): Value {
       const n = nums(e, s);
@@ -100,7 +108,7 @@ export function spreadsheetDateFunctions(N: ToNumber, X: ToText, system: DateSys
       const u = X(unit);
       if (isError(u)) return u;
       const [s, e] = n as [number, number];
-      if (s < 0 || s > MAX_SERIAL || e < 0 || e > MAX_SERIAL || s > e) return num("#NUM!");
+      if (s < 0 || s > max || e < 0 || e > max || s > e) return num("#NUM!");
       switch (u.toUpperCase()) {
         case "D": return Math.floor(e) - Math.floor(s);
         case "M": return months(s, e);

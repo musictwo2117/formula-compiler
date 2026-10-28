@@ -3,6 +3,27 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## 0.2.1 — 2026-10-28
+
+### Fixed
+
+- **SQL no longer fails the whole query on an out-of-range date.** `DATE(2024,-1E7,1)`, `EDATE(A2,-1E6)` and
+  similar raised PostgreSQL's `timestamp out of range`; they are now `#NUM!` for that row.
+- **Out-of-range dates agree in JS and SQL.** Huge month or day arguments gave `NaN` in JS and a clamped,
+  wrong date in SQL. Both now follow the real programs, checked in Excel for the web and Google Sheets:
+  - Excel: results after 9999-12-31 are `#NUM!`; `DATE` months outside -32767 to 32766 are `#NUM!`, and days
+    outside -32768 to 32767 count as 32767.
+  - Sheets: dates may go past 9999 (`DATE(9999,12,32)` = 10000-01-01, `YEAR` of it is 10000); anything before
+    serial 0 is `#NUM!` (`EDATE(0,-1)` was -30). Dates after 99999-12-31 are `#NUM!` here although Sheets still
+    gives a number.
+- **SQL lookups are much faster.** `VLOOKUP` / `XLOOKUP` / `MATCH` / `INDEX` no longer renumber the whole table
+  with a window for every row, and their comparisons can use an index on the lookup column. On 4,000 rows,
+  `VLOOKUP` went from 6.8 s to 1.2 s (18 ms with an index); `INDEX`/`MATCH` from 24 s to 11 s.
+
+### Changed
+
+- `orderBy` must be unique and not null (ties already gave an arbitrary row order).
+
 ## 0.2.0 — 2026-10-28
 
 ### Added

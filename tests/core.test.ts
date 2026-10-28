@@ -147,3 +147,55 @@ describe("registry", () => {
     expect(excel.status === "ok" && excel.spec.minArgs).toBe(2);
   });
 });
+
+describe("SQL lookups", () => {
+  let db: PGlite;
+  beforeAll(async () => {
+    db = new PGlite();
+    await db.waitReady;
+    // Stored out of order: the orderBy field, not the physical order, decides row 1, 2, 3.
+    await db.exec(`CREATE TABLE "fruit" ("n" int, "name" text, "price" float8);
+      INSERT INTO "fruit" VALUES (3, 'cherry', 30), (1, 'apple', 10), (2, 'Apple', 20);
+      CREATE INDEX ON "fruit" ("price"); ANALYZE "fruit"`);
+  });
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  const options = {
+    from: "excel" as const,
+    table: "fruit",
+    orderBy: "n",
+    columnMap: { A: "n", B: "name", C: "price" },
+    fieldTypes: { n: "number", name: "text", price: "number" } as const,
+  };
+  const rows = [{ n: 1, name: "apple", price: 10 }, { n: 2, name: "Apple", price: 20 }, { n: 3, name: "cherry", price: 30 }];
+
+  it.each([
+    ["=VLOOKUP(\"APPLE\",B:C,2,FALSE)", 10],
+    ["=XLOOKUP(\"apple\",B:B,C:C,\"none\",0,-1)", 20],
+    ["=MATCH(30,C:C,0)", 4],
+    ["=INDEX(B:B,3)", "Apple"],
+    ["=INDEX(B:B,MATCH(25,C:C,1))", "Apple"],
+  ])("%s follows orderBy in SQL and ctx.rows in JS", async (formula, expected) => {
+    expect(compile(formula, { ...options, to: "js" }).evaluate(rows[0]!, { rows })).toBe(expected);
+    const sql = compile(formula, { ...options, to: "sql" });
+    const res = await db.query<{ v: unknown; e: string | null }>(`SELECT ${sql.sql} AS v, ${sql.errorSql} AS e FROM "fruit" WHERE "n" = 1`);
+    expect(res.rows[0]).toEqual({ v: expected, e: null });
+  });
+
+  it("does not renumber the table for every row", () => {
+    // A window per outer row made lookups quadratic; plain comparisons also let PostgreSQL use an index.
+    const sql = compile("=VLOOKUP(C2,C:C,1,FALSE)", { ...options, to: "sql" });
+    expect(sql.sql + sql.errorSql).not.toMatch(/row_number|OVER \(/);
+    expect(sql.sql).toContain(`"__fc_r"."price" = `);
+  });
+
+  it("uses an index on the lookup column", async () => {
+    const sql = compile("=VLOOKUP(C2,C:C,1,FALSE)", { ...options, to: "sql" });
+    await db.exec("SET enable_seqscan = off");
+    const plan = await db.query<{ "QUERY PLAN": string }>(`EXPLAIN SELECT ${sql.sql} FROM "fruit"`);
+    await db.exec("RESET enable_seqscan");
+    expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/Index (Only )?Scan using fruit_price_idx/);
+  });
+});
