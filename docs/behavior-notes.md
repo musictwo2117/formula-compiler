@@ -224,6 +224,9 @@ Airtable behaves much like JavaScript.
   (`DATE(2024,1,1E9)` = `DATE(2024,1,-1E9)` = `DATE(2024,1,32767)` = 78058). `EDATE` has no such limit
   (`EDATE(45000,90000)` = 2784318).
 - Lookups behave like Sheets (all 25 lookup probes gave the same answers).
+- `TODAY()` / `NOW()` in Excel for the web use the **browser's** local time zone (there is no workbook setting):
+  checked 2026-10-29 in a browser in Asia/Bangkok, `NOW()` at 00:36:01.820Z was 46324.316687732 (07:36:01.820).
+  Pass that zone as `timeZone` (default UTC); `tests/core.test.ts` checks it.
 
 ### Bounded ranges (Google Sheets, Excel)
 
