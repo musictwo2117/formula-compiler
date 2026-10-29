@@ -26,6 +26,13 @@ export interface TestCase {
   error?: { code: string; functionName?: string; start?: number; end?: number };
   /** Behaviour we could not confirm against the real program: not run. */
   todo?: string;
+  /**
+   * A known, accepted difference from the real program (documented in docs/behavior-notes.md); `expected` is
+   * the real program's value. With `ours`, the case runs and checks that JS and SQL both give `ours`; without
+   * it (JS and SQL differ too), it is skipped.
+   */
+  limitation?: string;
+  ours?: unknown;
   /** Runs (checks our behaviour and JS/SQL parity) but needs confirming against the real program. */
   unverified?: string;
   /** The case is valid but the SQL target refuses it (with UNSUPPORTED_IN_SQL). */
@@ -86,6 +93,10 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
         it.todo(`${name} — ${c.todo}`);
         return;
       }
+      if (c.limitation && !("ours" in c)) {
+        it.skip(`[known difference] ${name} — ${c.limitation}`);
+        return;
+      }
       if (c.unverified) it.todo(`verify against ${dialect}: ${c.formula} — ${c.unverified}`);
 
       const rows = c.rows ?? [c.record ?? {}];
@@ -118,10 +129,11 @@ export function runCases(dialect: Dialect, cases: TestCase[]): void {
         return;
       }
 
-      it(`${c.unverified ? "[unverified] " : ""}${name}`, async () => {
+      const want = c.limitation ? c.ours : c.expected;
+      it(`${c.unverified ? "[unverified] " : c.limitation ? "[known difference] " : ""}${name}`, async () => {
         const js = compile(c.formula, { ...base, to: "js" });
         const jsValue = normalize(js.evaluate(current, c.now ? { rows, now: c.now } : { rows }));
-        expect(jsValue, "JS result").toEqual(c.expected);
+        expect(jsValue, "JS result").toEqual(want);
 
         if (c.sqlUnsupported) {
           expect(() => compile(c.formula, { ...base, to: "sql" })).toThrow(FormulaCompileError);

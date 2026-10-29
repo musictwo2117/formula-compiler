@@ -122,8 +122,11 @@ export function calendarParts(serial: number, system: DateSystem): { y: number; 
  */
 export const MAX_SERIAL: Record<DateSystem, number> = { excel: 2958465, sheets: 35830290 };
 
-/** Months since January of year 0 that the date functions compute with (just past both limits). */
-export const MONTH_LIMIT = 100000 * 12;
+/**
+ * Months since January of year 0 that the date functions compute with: February of year 100000, just past both
+ * limits. Not January: EDATE takes the month length from two clamped months, which must still differ.
+ */
+export const MONTH_LIMIT = 100000 * 12 + 1;
 
 /**
  * Real-calendar serial of the first day of a month counted from January of year 0. Counts outside

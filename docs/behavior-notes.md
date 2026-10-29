@@ -19,10 +19,11 @@ a PR (with the program and date) if a program's behaviour changes.
   locale-aware ordering for punctuation and accented letters.
 - Case-insensitive text comparisons (`=`, lookups, `COUNTIF`, `SEARCH`) lower-case both sides: `toLowerCase()`
   in JS, `lower()` in SQL. This matches the real programs for ASCII and most accented letters (`"É"="é"`,
-  `"ß"="ẞ"`). **Not matched** (Google Sheets, checked 2026-10-29; the cases are todo): Sheets folds case, so
+  `"ß"="ẞ"`). **Not matched, accepted** (Google Sheets, checked 2026-10-29; `limitation` cases): Sheets folds case, so
   `"σ"="ς"` is TRUE where both JS and SQL say FALSE; a final `Σ` lower-cases to `ς` in JS but `σ` in SQL; and
   SQL lower-cases `İ` to `i` (`"İ"="i"` is TRUE, `LEN(LOWER("İ"))` is 1) where Sheets and JS give `i̇`. SQL also
   follows the database's character type (`LC_CTYPE`), so other databases may differ further.
+  Kept until PostgreSQL 18's `casefold()` can be required: folding only in JS would make JS and SQL disagree.
 - A `Date` in a date field is read in the machine's local time: `new Date(2024, 0, 15)` is 2024-01-15 in any time
   zone, as node-postgres builds `timestamp` values.
 - Not handled: results that overflow a double. PostgreSQL raises "value out of range" where JS gives
@@ -169,7 +170,8 @@ Airtable behaves much like JavaScript.
 - Sheets has no 9999-12-31 limit: `DATE(9999,12,32)` = 10000-01-01 and `YEAR` of it is 10000. Results below
   serial 0 are `#NUM!` (`EDATE(0,-1)`, `EOMONTH(0,-2)`, `DATE(2024,1,-1E9)`). **Not matched:** formula-compiler
   stops at 99999-12-31 and gives `#NUM!` after it, while Sheets still gives a number (`DATE(2024,1,1E9)` =
-  1000045291; months beyond 2^31 seem to be capped, `DATE(2024,1E10,1)` = 65362736589). These cases are todo.
+  1000045291; months beyond 2^31 seem to be capped, `DATE(2024,1E10,1)` = 65362736589). Accepted: neither JS
+  `Date` nor PostgreSQL holds such years (`limitation` cases).
 - `EDATE` / `EOMONTH` clamp to the month's end; `WEEKDAY` types 1, 2, 3 and 11-17; `HOUR` / `MINUTE` /
   `SECOND` round to the nearest second; `DATEDIF` with `"D"`, `"M"`, `"Y"`, `"YM"`.
 - `TODAY()` / `NOW()` use the `timeZone` option (default UTC): give it the spreadsheet's time zone (File →
@@ -244,7 +246,7 @@ Checked in both programs on 2026-10-29 with the same rows; the cases are in `tes
 - `SUMIF` and `XLOOKUP` ranges must cover the same rows. Sheets and Excel resize a `SUMIF` sum range from its
   top-left cell, and give `#N/A` (Sheets) or `#VALUE!` (Excel) for `XLOOKUP` ranges of different sizes;
   formula-compiler rejects both with `UNSUPPORTED_FEATURE`.
-- Open-ended ranges (`A2:A`) are not supported yet.
+- Open-ended ranges (`A2:A`) are not supported yet (a `SYNTAX` error).
 - Excel ranges past row 1,048,576 (Excel's last row) are rejected. In SQL a bounded range is the rows between
   two `orderBy` keys, computed once per query; an index on the `orderBy` field keeps small ranges of a big table fast.
 
