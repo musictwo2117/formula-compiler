@@ -89,7 +89,8 @@ CASE WHEN ((COALESCE("income", 0::float8) > 30000::float8) AND (COALESCE("age", 
 NULL::text
 ```
 
-Blank is `NULL`. Numbers are `double precision`. When the branches of `IF`/`SWITCH`/`IFERROR` have different
+The SQL needs PostgreSQL 15 or later; CI runs every case on PostgreSQL 15, 16, 17 and 18. Blank is `NULL`.
+Numbers are `double precision`. When the branches of `IF`/`SWITCH`/`IFERROR` have different
 types (`IF(x, "yes", 0)`), the result is `jsonb`. Whole-column aggregates become subqueries:
 `=SUM(B:B)` → `((SELECT COALESCE(SUM("__fc_r"."x"), 0::float8) FROM "people" AS "__fc_r"))`.
 
@@ -289,6 +290,7 @@ Development needs Node 22.12 or later (Vitest 5); the published package still ru
 ```bash
 npm install
 npm test          # Vitest: every case runs in JS and in PGlite (PostgreSQL 17)
+FC_TEST_DATABASE_URL=postgres://user@localhost/db npm test   # the SQL on a real server instead
 npm run typecheck
 npm run build
 ```

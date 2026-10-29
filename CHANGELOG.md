@@ -12,6 +12,8 @@ while the version is 0.x, a minor release can change behaviour to match the sour
   data are empty cells. In SQL they need `orderBy`. Checked in Sheets and Excel for the web (44 cases).
 - **Airtable `COUNT`, `COUNTA` and `COUNTALL`** with plain arguments (JS and SQL). Rollup and lookup fields
   are still not supported.
+- **CI runs every SQL case on real PostgreSQL 15, 16, 17 and 18** (en_US.UTF-8), besides PGlite. PostgreSQL 15
+  is the oldest supported version. `FC_TEST_DATABASE_URL` points the tests at a server.
 
 ### Fixed
 

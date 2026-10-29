@@ -1,10 +1,11 @@
 /**
  * Runs a JSON case file through both targets: the compiled JS function and
- * the compiled SQL on PGlite. Every runnable case must give the expected
- * value in JS and exactly the same value in SQL.
+ * the compiled SQL on PGlite or a PostgreSQL server (see tests/db.ts). Every
+ * runnable case must give the expected value in JS and exactly the same value
+ * in SQL.
  */
-import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openDb, type TestDb } from "./db";
 import { compile, FormulaCompileError, isError, type CompileOptions, type Dialect, type FieldType } from "../src/index";
 import { quoteIdent } from "../src/codegen/sql";
 import { dateFolding } from "../src/dialects/spreadsheet-dates";
@@ -66,10 +67,9 @@ function caseName(c: TestCase, i: number): string {
 }
 
 export function runCases(dialect: Dialect, cases: TestCase[]): void {
-  let db: PGlite;
+  let db: TestDb;
   beforeAll(async () => {
-    db = new PGlite();
-    await db.waitReady;
+    db = await openDb();
   });
   afterAll(async () => {
     await db?.close();

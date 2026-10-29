@@ -1,5 +1,5 @@
-import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openDb, type TestDb } from "./db";
 import { compile, FormulaCompileError, parseFormula, registry } from "../src/index";
 import { quoteIdent, quoteText } from "../src/codegen/sql";
 
@@ -116,10 +116,9 @@ describe("TODAY() / NOW() with the timeZone option", () => {
     { timeZone: "Asia/Bangkok", now: "2026-10-29T00:23:06.007Z", today: 46324, now_: 46324.307708414 },
     { timeZone: "America/Los_Angeles", now: "2026-10-29T00:23:20.228Z", today: 46323, now_: 46323.724539676 },
   ];
-  let db: PGlite;
+  let db: TestDb;
   beforeAll(async () => {
-    db = new PGlite();
-    await db.waitReady;
+    db = await openDb();
   });
   afterAll(async () => {
     await db?.close();
@@ -183,9 +182,9 @@ describe("Date field values", () => {
 });
 
 describe("security", () => {
-  let db: PGlite;
+  let db: TestDb;
   beforeAll(async () => {
-    db = new PGlite();
+    db = await openDb();
   });
   afterAll(async () => {
     await db.close();
@@ -239,10 +238,9 @@ describe("registry", () => {
 });
 
 describe("SQL lookups", () => {
-  let db: PGlite;
+  let db: TestDb;
   beforeAll(async () => {
-    db = new PGlite();
-    await db.waitReady;
+    db = await openDb();
     // Stored out of order: the orderBy field, not the physical order, decides row 1, 2, 3.
     await db.exec(`CREATE TABLE "fruit" ("n" int, "name" text, "price" float8);
       INSERT INTO "fruit" VALUES (3, 'cherry', 30), (1, 'apple', 10), (2, 'Apple', 20);
@@ -343,7 +341,7 @@ describe("SQL size of date functions", () => {
   it.each(["excel", "sheets"] as const)("runs deeply nested %s date SQL in PostgreSQL", async (from) => {
     // Short SQL is not enough: if PostgreSQL flattened the bindings back, the plan itself would
     // blow up (depth 3 ran out of memory before bindings got OFFSET 0).
-    const db = new PGlite();
+    const db = await openDb();
     try {
       await db.exec(`CREATE TABLE "t" ("d" float8); INSERT INTO "t" VALUES (45000)`);
       const formula = nested(8);
