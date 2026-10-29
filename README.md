@@ -268,8 +268,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
   browser's (Excel for the web), or the result is hours off. Excel was checked in Asia/Bangkok only.
 - References: only cells in the formula's own row, plus whole columns (`A:A`, `Table1[col]`) and bounded ranges
   (`A2:A10`) inside aggregates and lookups (multi-column `D:F` / `D2:F10` only as the `VLOOKUP` / `INDEX`
-  table). Other rows, other sheets, whole rows and ranges that include the header row (`A1:A10`) are rejected with
-  `UNSUPPORTED_REFERENCE`; open-ended ranges (`A2:A`) are a `SYNTAX` error. Whole columns hold the data rows only: the header row
+  table). Other rows, other sheets, whole rows, open-ended ranges (`A2:A`, `A:A10`) and ranges that include the
+  header row (`A1:A10`) are rejected with `UNSUPPORTED_REFERENCE`. Whole columns hold the data rows only: the header row
   reads as empty (`INDEX(B:B, 1)` is blank, not the header text). `SUMIF` / `XLOOKUP` ranges must cover the same
   rows.
 - Dates: Sheets/Excel serial dates and 15 date functions; Airtable dates, `NETWORKDAYS`/`WORKDAY`, `WEEKNUM`,

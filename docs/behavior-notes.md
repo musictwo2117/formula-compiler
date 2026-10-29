@@ -252,7 +252,7 @@ Checked in both programs on 2026-10-29 with the same rows; the cases are in `tes
 - `SUMIF` and `XLOOKUP` ranges must cover the same rows. Sheets and Excel resize a `SUMIF` sum range from its
   top-left cell, and give `#N/A` (Sheets) or `#VALUE!` (Excel) for `XLOOKUP` ranges of different sizes;
   formula-compiler rejects both with `UNSUPPORTED_FEATURE`.
-- Open-ended ranges (`A2:A`) are not supported yet (a `SYNTAX` error).
+- Open-ended ranges (`A2:A`, `A:A10`) are not supported yet (`UNSUPPORTED_REFERENCE`).
 - Excel ranges past row 1,048,576 (Excel's last row) are rejected. In SQL a bounded range is the rows between
   two `orderBy` keys, computed once per query; an index on the `orderBy` field keeps small ranges of a big table fast.
 
