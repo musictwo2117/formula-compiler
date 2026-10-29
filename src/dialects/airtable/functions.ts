@@ -4,7 +4,7 @@
  * (see docs/behavior-notes.md).
  */
 import { registry } from "../../core/registry";
-import { quoteText, sqlFloat, type SqlGen, type SqlVal } from "../../codegen/sql";
+import { errorIf, quoteText, sqlFloat, type KindArm, type SqlGen, type SqlVal } from "../../codegen/sql";
 import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, sqlArgs, substituteNthSql } from "../shared";
 import { airtableValue } from "../../runtime/common";
 import { switchJs } from "../spreadsheet-functions";
@@ -12,14 +12,23 @@ import { switchJs } from "../spreadsheet-functions";
 const def = definer("airtable");
 const ERR = "#ERROR!";
 
-/** Text argument of a text function: numbers and booleans are #ERROR! in Airtable. */
-function textArg(g: SqlGen, x: SqlVal): SqlVal {
+/** #ERROR! when x is a real blank (an empty number field, BLANK()) rather than empty text. */
+function blankError(x: SqlVal): string | null {
+  if (!x.nullable) return null;
+  return x.t === "blank" ? quoteText(ERR) : errorIf(`${x.v} IS NULL`, ERR);
+}
+
+/**
+ * Text argument of a text function: numbers and booleans are #ERROR! in Airtable, and so is a real
+ * blank unless blankIsEmpty (RIGHT(BLANK(), 1) is "" but LEN(BLANK()) is #ERROR!).
+ */
+function textArg(g: SqlGen, x: SqlVal, blankIsEmpty = false): SqlVal {
   const p = g.dispatch(x, (a) => {
     if (a.k === "text") return { v: a.e, err: null };
     if (a.k === "blank") return { v: "''", err: null };
     return { v: "NULL::text", err: quoteText(ERR) };
   });
-  return g.make("text", p.v, [x.err, p.err]);
+  return g.make("text", p.v, [x.err, blankIsEmpty ? null : blankError(x), p.err]);
 }
 
 const pow10 = (d: string) => `power(10::float8, ${d})`;
@@ -103,11 +112,11 @@ def({
   name: "T",
   minArgs: 1,
   maxArgs: 1,
-  summary: "T(value) — the value if it is text, otherwise blank",
+  summary: "T(value) — the value if it is text, otherwise empty text",
   sql: (c, g) => {
     const x = g.expr(c.args[0]!);
-    const p = g.dispatch(x, (a) => ({ v: a.k === "text" ? a.e : "NULL::text", err: null }));
-    return g.make("text", p.v, [x.err], true);
+    const p = g.dispatch(x, (a) => ({ v: a.k === "text" ? a.e : "''", err: null }));
+    return g.make("text", p.v, [x.err]);
   },
 });
 
@@ -162,10 +171,10 @@ def({
   },
 });
 
-/** Numbers taken by AVERAGE / MIN / MAX: blanks and text are skipped (NULL). */
+/** Numbers taken by AVERAGE / MIN / MAX: blanks, text and booleans are skipped (NULL). */
 function countedNumbers(c: Parameters<typeof sqlArgs>[0], g: SqlGen): SqlVal[] {
   return sqlArgs(c, g).map((x) => {
-    const p = g.dispatch(x, (a) => (a.k === "number" || a.k === "boolean" ? g.sem.toNumber(a) : { v: "NULL::float8", err: null }));
+    const p = g.dispatch(x, (a) => (a.k === "number" ? g.sem.toNumber(a) : { v: "NULL::float8", err: null }));
     return g.make("number", p.v, [x.err], true);
   });
 }
@@ -174,7 +183,7 @@ def({
   name: "AVERAGE",
   minArgs: 1,
   maxArgs: Infinity,
-  summary: "AVERAGE(number1, ...) — blanks and text are skipped",
+  summary: "AVERAGE(number1, ...) — blanks, text and booleans are skipped",
   sql: (c, g) => {
     const ns = countedNumbers(c, g);
     const sum = ns.map((n) => `COALESCE(${n.v}, 0::float8)`).join(" + ");
@@ -182,15 +191,15 @@ def({
     return g.make("number", `CASE WHEN (${count}) = 0 THEN 'NaN'::float8 ELSE (${sum}) / (${count}) END`, ns.map((n) => n.err));
   },
 });
-for (const [name, fn, empty] of [["MIN", "LEAST", Infinity], ["MAX", "GREATEST", -Infinity]] as const) {
+for (const [name, fn] of [["MIN", "LEAST"], ["MAX", "GREATEST"]] as const) {
   def({
     name,
     minArgs: 1,
     maxArgs: Infinity,
-    summary: `${name}(number1, ...) — blanks and text are skipped`,
+    summary: `${name}(number1, ...) — blanks, text and booleans are skipped; 0 when there are no numbers`,
     sql: (c, g) => {
       const ns = countedNumbers(c, g);
-      return g.make("number", `COALESCE(${fn}(${ns.map((n) => n.v).join(", ")}), ${sqlFloat(empty)})`, ns.map((n) => n.err));
+      return g.make("number", `COALESCE(${fn}(${ns.map((n) => n.v).join(", ")}), 0::float8)`, ns.map((n) => n.err));
     },
   });
 }
@@ -209,9 +218,40 @@ def({
       const n = `CASE WHEN ${digits} = '' THEN 0::float8 WHEN ${digits} ~ '^[0-9]*\\.?[0-9]*$' AND ${digits} <> '.' THEN (${digits})::float8 ELSE 'NaN'::float8 END`;
       return { v: `(${n} * CASE WHEN strpos(${a.e}, '-') > 0 THEN -1 ELSE 1 END / CASE WHEN strpos(${a.e}, '%') > 0 THEN 100 ELSE 1 END)`, err: null };
     });
-    return g.make("number", p.v, [x.err, p.err]);
+    return g.make("number", p.v, [x.err, blankError(x), p.err]);
   },
 });
+
+def({
+  name: "COUNT",
+  minArgs: 1,
+  maxArgs: Infinity,
+  summary: "COUNT(value1, ...) — counts numbers; text, booleans and blanks are not counted",
+  notes: "Plain arguments only: rollup and lookup (array) fields are not supported.",
+  sql: (c, g) => countSql(g, sqlArgs(c, g), (a) => (a.k === "number" ? "1" : "0")),
+});
+def({
+  name: "COUNTA",
+  minArgs: 1,
+  maxArgs: Infinity,
+  summary: "COUNTA(value1, ...) — counts everything except blanks and empty text",
+  notes: "Plain arguments only: rollup and lookup (array) fields are not supported.",
+  sql: (c, g) => countSql(g, sqlArgs(c, g), (a) => (a.k === "blank" ? "0" : "1")),
+});
+def({
+  name: "COUNTALL",
+  minArgs: 1,
+  maxArgs: Infinity,
+  summary: "COUNTALL(value1, ...) — counts every argument, blanks included",
+  notes: "Plain arguments only: rollup and lookup (array) fields are not supported.",
+  sql: (c, g) => countSql(g, sqlArgs(c, g), () => "1"),
+});
+
+/** Sum of 0/1 per argument; an error in any argument is the result. */
+function countSql(g: SqlGen, xs: SqlVal[], counted: (a: KindArm) => string): SqlVal {
+  const parts = xs.map((x) => g.dispatch(x, (a) => ({ v: counted(a), err: null })).v);
+  return g.make("number", `(${parts.join(" + ")})::float8`, xs.map((x) => x.err));
+}
 
 // ---------------------------------------------------------------- text
 
@@ -272,7 +312,7 @@ def({
   sql: (c, g) => {
     const [s, n] = sqlArgs(c, g);
     const k = g.toNumber(n!);
-    const t = textArg(g, s!);
+    const t = textArg(g, s!, true);
     const start = `(length(${t.v}) - ${k.v})`;
     return g.make("text", `CASE WHEN ${start} < 0 THEN '' ELSE substr(${t.v}, ${clampIndex(start, `length(${t.v})`)} + 1) END`, [k.err, t.err]);
   },
@@ -287,31 +327,54 @@ def({
     const [s, st, n] = sqlArgs(c, g);
     const start = g.toNumber(st!);
     const k = g.toNumber(n!);
-    const t = textArg(g, s!);
+    const t = textArg(g, s!, true);
     return g.make("text", `CASE WHEN trunc(${start.v}) < 1 THEN '' ELSE substr(${t.v}, ${g.int(start, 1)}, ${g.int(k, 0)}) END`, [start.err, k.err, t.err]);
   },
 });
 
-for (const name of ["FIND", "SEARCH"] as const) {
-  def({
-    name,
-    minArgs: 2,
-    maxArgs: 3,
-    summary: `${name}(stringToFind, whereToSearch, [startFromPosition])`,
-    notes:
-      name === "FIND"
-        ? "Case-sensitive; startFromPosition is 1-based; 0 when not found."
-        : "Same as FIND (case-sensitive, 0 inside expressions); a not-found SEARCH shown as the whole result is empty.",
-    sql: (c, g) => {
-      const [n, h, st] = sqlArgs(c, g);
-      const start = st ? g.toNumber(st) : g.number(1);
-      const s0 = `(${g.int(start, 1)} - 1)`;
-      const [needle, hay] = [textArg(g, n!), textArg(g, h!)];
-      const v = `CASE WHEN ${s0} > length(${hay.v}) THEN 0::float8 ELSE COALESCE((NULLIF(strpos(substr(${hay.v}, ${s0} + 1), ${needle.v}), 0) + ${s0})::float8, 0::float8) END`;
-      return g.make("number", v, [start.err, needle.err, hay.err]);
-    },
-  });
+/** 1-based position of needle in hay from startFromPosition, 0 when not found (NULL needle: 0). */
+function findSql(start: SqlVal, needle: string, hay: string, g: SqlGen): string {
+  const s0 = `(${g.int(start, 1)} - 1)`;
+  return `CASE WHEN ${s0} > length(${hay}) THEN 0::float8 ELSE COALESCE((NULLIF(strpos(substr(${hay}, ${s0} + 1), ${needle}), 0) + ${s0})::float8, 0::float8) END`;
 }
+
+def({
+  name: "FIND",
+  minArgs: 2,
+  maxArgs: 3,
+  summary: "FIND(stringToFind, whereToSearch, [startFromPosition])",
+  notes:
+    "Case-sensitive; startFromPosition is 1-based; 0 when not found. Blank when whereToSearch is blank or empty; " +
+    "a number to find is read as text, a boolean or blank is never found.",
+  sql: (c, g) => {
+    const [n, h, st] = sqlArgs(c, g);
+    const start = st ? g.toNumber(st) : g.number(1);
+    // NULL hay: blank or empty (the result is blank); NULL needle: never found.
+    const hay = g.dispatch(h!, (a) => (a.k === "text" ? { v: a.e, err: null } : { v: "NULL::text", err: a.k === "blank" ? null : quoteText(ERR) }));
+    const needle = g.dispatch(n!, (a) => {
+      if (a.k === "text") return { v: a.e, err: null };
+      if (a.k === "number") return g.sem.toText(a);
+      return { v: a.k === "blank" && a.empty ? "''" : "NULL::text", err: null };
+    });
+    const v = `CASE WHEN ${hay.v} IS NULL THEN NULL ELSE ${findSql(start, needle.v, hay.v, g)} END`;
+    return g.make("number", v, [start.err, h!.err, hay.err, n!.err], true);
+  },
+});
+def({
+  name: "SEARCH",
+  minArgs: 2,
+  maxArgs: 3,
+  summary: "SEARCH(stringToFind, whereToSearch, [startFromPosition])",
+  notes:
+    "Case-sensitive like FIND, 0 inside expressions; both arguments must be text (a number, boolean or blank is " +
+    "#ERROR!); a not-found SEARCH shown as the whole result is empty.",
+  sql: (c, g) => {
+    const [n, h, st] = sqlArgs(c, g);
+    const start = st ? g.toNumber(st) : g.number(1);
+    const [needle, hay] = [textArg(g, n!), textArg(g, h!)];
+    return g.make("number", findSql(start, needle.v, hay.v, g), [start.err, needle.err, hay.err]);
+  },
+});
 
 def({
   name: "SUBSTITUTE",
@@ -322,7 +385,7 @@ def({
   sql: (c, g) => {
     const [s, o, n, idx] = sqlArgs(c, g);
     const i = idx ? g.toNumber(idx) : null;
-    const ts = [textArg(g, s!), textArg(g, o!), textArg(g, n!)];
+    const ts = [textArg(g, s!, true), textArg(g, o!), textArg(g, n!)];
     const [t, old, rep] = ts.map((x) => x.v) as [string, string, string];
     if (!i) return g.make("text", `CASE WHEN ${old} = '' THEN ${t} ELSE replace(${t}, ${old}, ${rep}) END`, ts.map((x) => x.err));
     const iv = g.int(i);
@@ -353,7 +416,7 @@ registry.markUnsupported("airtable", DATE_FUNCTIONS.concat([
   "IS_SAME", "WORKDAY_DIFF", "TONOW", "FROMNOW", "SET_LOCALE", "SET_TIMEZONE", "CREATED_TIME", "LAST_MODIFIED_TIME",
 ]), "date and time functions are planned");
 registry.markUnsupported("airtable", [
-  "ARRAYJOIN", "ARRAYUNIQUE", "ARRAYCOMPACT", "ARRAYFLATTEN", "ARRAYSLICE", "COUNTALL", "COUNTA", "COUNT",
+  "ARRAYJOIN", "ARRAYUNIQUE", "ARRAYCOMPACT", "ARRAYFLATTEN", "ARRAYSLICE",
 ], "array/rollup functions are planned");
 registry.markUnsupported("airtable", [
   "POWER", "SQRT", "EXP", "LOG", "CEILING", "FLOOR", "EVEN", "ODD", "XOR", "REPT", "ENCODE_URL_COMPONENT",

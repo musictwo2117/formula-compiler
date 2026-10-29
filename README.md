@@ -189,8 +189,9 @@ for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, 
 | `AVERAGE` | ✅ | ✅ | ✅ |
 | `BLANK` | ✅ | — | — |
 | `CONCATENATE` | ✅ | ✅ | ✅ |
-| `COUNT` | ⏳ | ✅ | ✅ |
-| `COUNTA` | ⏳ | ✅ | ✅ |
+| `COUNT` | ✅ | ✅ | ✅ |
+| `COUNTA` | ✅ | ✅ | ✅ |
+| `COUNTALL` | ✅ | — | — |
 | `COUNTIF` | — | ✅ | ✅ |
 | `DATE` | ⏳ | ✅ | ✅ |
 | `DATEDIF` | ⏳ | ✅ | ✅ |

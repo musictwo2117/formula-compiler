@@ -50,11 +50,18 @@ function text(x: Value): string | FormulaError {
   return x;
 }
 
-/** Text argument of a text function (LEN, LEFT, ...): numbers and booleans are errors. */
+/**
+ * Text argument of a text function (LEN, LEFT, ...): numbers and booleans are errors, and so is a
+ * blank that is not empty text (an empty number field, BLANK()): LEN(BLANK()) is #ERROR!.
+ */
 function textArg(x: Value): string | FormulaError {
   if (isError(x)) return x;
-  if (isBlank(x)) return "";
   return typeof x === "string" ? x : err();
+}
+
+/** Text argument that reads any blank as "" (RIGHT, SUBSTITUTE's text: RIGHT(BLANK(), 1) is ""). */
+function textOrEmpty(x: Value): string | FormulaError {
+  return x === null ? "" : textArg(x);
 }
 
 function truthy(x: Value): boolean | FormulaError {
@@ -76,11 +83,14 @@ function arith(a: Value, b: Value, f: (x: number, y: number) => number, strict =
 
 type Plain = Exclude<Value, FormulaError>;
 
-/** JavaScript-style loose comparison: -1 / 0 / 1, or NaN when not comparable. */
-function compare(a: Plain, b: Plain): number {
+/**
+ * JavaScript-style loose comparison: -1 / 0 / 1, or NaN when not comparable. Against text a blank
+ * is "" for = and != but the number 0 for < > <= >= ({n} = "" is true, {n} < "a" is false).
+ */
+function compare(a: Plain, b: Plain, equality: boolean): number {
   if (isBlank(a) && isBlank(b)) return 0;
-  if (isBlank(a)) a = typeof b === "string" ? "" : 0;
-  if (isBlank(b)) b = typeof a === "string" ? "" : 0;
+  if (isBlank(a)) a = typeof b === "string" && (equality || a === "") ? "" : 0;
+  if (isBlank(b)) b = typeof a === "string" && (equality || b === "") ? "" : 0;
   if (typeof a === "string" && typeof b === "string") return a < b ? -1 : a > b ? 1 : 0;
   const x = num(a) as number;
   const y = num(b) as number;
@@ -91,7 +101,9 @@ function compare(a: Plain, b: Plain): number {
 function cmp(op: string, a: Value, b: Value): Value {
   if (isError(a)) return a;
   if (isError(b)) return b;
-  const c = compare(a, b);
+  // != keeps a real blank apart from "" and 0 (where = says they are equal): {n} != "" is true.
+  if (op === "<>" && (a === null) !== (b === null)) return true;
+  const c = compare(a, b, op === "=" || op === "<>");
   if (Number.isNaN(c)) return op === "<>";
   switch (op) {
     case "=": return c === 0;
@@ -113,13 +125,12 @@ function numbers(xs: Value[]): number[] | FormulaError {
   return out;
 }
 
-/** MIN / MAX / AVERAGE skip blanks and text. */
+/** MIN / MAX / AVERAGE skip blanks, text and booleans. */
 function countedNumbers(xs: Value[]): number[] | FormulaError {
   const out: number[] = [];
   for (const x of xs) {
     if (isError(x)) return x;
     if (typeof x === "number") out.push(x);
-    else if (typeof x === "boolean") out.push(x ? 1 : 0);
   }
   return out;
 }
@@ -134,11 +145,11 @@ function strArgs<T>(xs: Value[], f: (...s: string[]) => T, conv: (x: Value) => s
   return f(...out);
 }
 
-/** Field read: blank text fields are "", unchecked checkboxes are blank. */
+/** Field read: blank text fields and unchecked checkboxes are "" (empty text, not a blank number). */
 function field(raw: unknown, name: string, type?: FieldType): Value {
   const v = normalize(raw, name);
-  if (v === false) return null;
-  if (v === null && type === "text") return "";
+  if (v === false) return "";
+  if (v === null && (type === "text" || type === "boolean")) return "";
   return v;
 }
 
@@ -196,7 +207,8 @@ export const airtableRuntime = {
   ERROR: (): Value => err(),
   /** 1 for errors and for Infinity / NaN, else 0 (Airtable returns a number). */
   ISERROR: (x: Value): Value => (isError(x) || (typeof x === "number" && !Number.isFinite(x)) ? 1 : 0),
-  T: (x: Value): Value => (isError(x) ? x : typeof x === "string" && x !== "" ? x : null),
+  /** "" for anything but text (shown as empty; LEN(T(5)) is 0). */
+  T: (x: Value): Value => (isError(x) ? x : typeof x === "string" ? x : ""),
   SWITCH(expr: Value, ...rest: (Value | Thunk)[]): Value {
     if (isError(expr)) return expr;
     let i = 0;
@@ -235,18 +247,35 @@ export const airtableRuntime = {
     const ns = countedNumbers(xs);
     return isError(ns) ? ns : ns.reduce((s, n) => s + n, 0) / ns.length;
   },
+  /** 0 when there are no numbers. */
   MIN(...xs: Value[]): Value {
     const ns = countedNumbers(xs);
-    return isError(ns) ? ns : Math.min(...ns);
+    return isError(ns) ? ns : ns.length === 0 ? 0 : Math.min(...ns);
   },
   MAX(...xs: Value[]): Value {
     const ns = countedNumbers(xs);
-    return isError(ns) ? ns : Math.max(...ns);
+    return isError(ns) ? ns : ns.length === 0 ? 0 : Math.max(...ns);
+  },
+  /** Numbers only (NaN and Infinity too); text, booleans and blanks are not counted. */
+  COUNT(...xs: Value[]): Value {
+    const e = xs.find(isError);
+    return e ?? xs.filter((x) => typeof x === "number").length;
+  },
+  /** Everything but blanks and empty text (FALSE() and 0 count). */
+  COUNTA(...xs: Value[]): Value {
+    const e = xs.find(isError);
+    return e ?? xs.filter((x) => !isBlank(x)).length;
+  },
+  /** Every argument, blanks included. */
+  COUNTALL(...xs: Value[]): Value {
+    const e = xs.find(isError);
+    return e ?? xs.length;
   },
   VALUE(x: Value): Value {
     if (isError(x)) return x;
     if (typeof x === "number") return x;
-    if (isBlank(x)) return 0;
+    if (x === null) return err();
+    if (x === "") return 0;
     if (typeof x === "boolean") return x ? 1 : 0;
     return airtableValue(x);
   },
@@ -269,24 +298,36 @@ export const airtableRuntime = {
       const c = chars(s);
       const start = c.length - k[0]!;
       return start < 0 ? "" : substring(c, start);
-    });
+    }, textOrEmpty);
   },
   /** MID with whereToStart < 1 is "". */
   MID(x: Value, start: Value, n: Value): Value {
     const ks = numbers([start, n]);
     if (isError(ks)) return ks;
     const [st, k] = [Math.trunc(ks[0]!), Math.max(0, Math.trunc(ks[1]!))];
-    return strArgs([x], (s) => (st < 1 ? "" : chars(s).slice(st - 1, st - 1 + k).join("")));
+    return strArgs([x], (s) => (st < 1 ? "" : chars(s).slice(st - 1, st - 1 + k).join("")), textOrEmpty);
   },
-  /** startFromPosition is 1-based (0 behaves like 1); 0 when not found. */
+  /**
+   * startFromPosition is 1-based (0 behaves like 1); 0 when not found. Searching in a blank or empty
+   * text gives blank; a number to find is read as text, a boolean or real blank is never found.
+   */
   FIND(needle: Value, hay: Value, start?: Value): Value {
+    const ks = numbers([start ?? 1]);
+    if (isError(ks)) return ks;
+    if (isError(hay)) return hay;
+    if (isBlank(hay)) return null;
+    if (typeof hay !== "string") return err();
+    if (isError(needle)) return needle;
+    if (typeof needle === "number") needle = String(needle);
+    if (typeof needle !== "string") return 0;
+    return indexOfChars(chars(hay), chars(needle), Math.max(Math.trunc(ks[0]!), 1) - 1) + 1;
+  },
+  /** Like FIND, but both arguments must be text: a number, boolean or real blank is #ERROR!. */
+  SEARCH(needle: Value, hay: Value, start?: Value): Value {
     const ks = numbers([start ?? 1]);
     if (isError(ks)) return ks;
     const from = Math.max(Math.trunc(ks[0]!), 1) - 1;
     return strArgs([needle, hay], (n, h) => indexOfChars(chars(h), chars(n), from) + 1);
-  },
-  SEARCH(needle: Value, hay: Value, start?: Value): Value {
-    return airtableRuntime.FIND(needle, hay, start);
   },
   /** index <= 0 or past the last occurrence changes nothing. */
   SUBSTITUTE(x: Value, o: Value, n: Value, index?: Value): Value {
@@ -296,7 +337,9 @@ export const airtableRuntime = {
       if (isError(i)) return i;
       idx = Math.trunc(i[0]!);
     }
-    return strArgs([x, o, n], (s, a, b) => (idx !== undefined && idx < 1 ? s : substituteText(s, a, b, idx)));
+    const s = textOrEmpty(x);
+    if (isError(s)) return s;
+    return strArgs([s, o, n], (s, a, b) => (idx !== undefined && idx < 1 ? s : substituteText(s, a, b, idx)));
   },
   /** string.substring(0, start-1) + replacement + string.substring(start-1+count). */
   REPLACE(x: Value, start: Value, n: Value, repl: Value): Value {

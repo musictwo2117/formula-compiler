@@ -10,12 +10,27 @@ while the version is 0.x, a minor release can change behaviour to match the sour
 - **Bounded ranges (Google Sheets, Excel):** `SUM(A2:A10)`, `COUNTIF(A2:A10, ">5")`, `VLOOKUP(x, D2:F10, 2, FALSE)`
   and the other aggregates and lookups that took whole columns. Rows count from the header row; rows past the
   data are empty cells. In SQL they need `orderBy`. Checked in Sheets and Excel for the web (44 cases).
+- **Airtable `COUNT`, `COUNTA` and `COUNTALL`** with plain arguments (JS and SQL). Rollup and lookup fields
+  are still not supported.
 
 ### Fixed
 
 - **Sheets `COUNTIF(range, "<>5")` no longer counts empty cells** (Excel does, and still does here); `"<>x"` still
   counts them in both.
 - Unsupported lookup functions (`OFFSET`, `HLOOKUP`, …) name the supported ones in their error message.
+
+Airtable blanks, checked by field type in a real base:
+
+- An unchecked checkbox is empty text, as in Airtable: `{chk} * 2` is `#ERROR!` (was 0).
+- `!=` keeps a real blank (empty number field, `BLANK()`) apart from `""` and 0: `{n} != ""` is true (was false).
+- A real blank against text in `<` `>` `<=` `>=` is the number 0: `{n} < "a"` is false (was true).
+- `LEN`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `REPLACE`, `VALUE` of a real blank, `SEARCH` in one and `SUBSTITUTE`
+  with one as the replacement are `#ERROR!` (were `""` / 0).
+- `T()` of a non-text value is `""` (was blank), so `LEN(T(5))` is 0.
+- `FIND` in a blank or empty text is blank (was 0), `FIND` of a number reads it as text (`FIND(5, "a5")` = 2, was
+  `#ERROR!`) and `FIND` of a boolean or real blank is 0 (was 1 for a blank). `SEARCH` of a real blank is
+  `#ERROR!`.
+- `AVERAGE`, `MIN` and `MAX` skip booleans; `MIN` / `MAX` with no numbers are 0 (were Infinity / -Infinity).
 
 ## 0.2.3 — 2026-10-29
 
