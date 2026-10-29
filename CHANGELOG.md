@@ -10,6 +10,22 @@ while the version is 0.x, a minor release can change behaviour to match the sour
 - **Open-ended ranges (`A2:A`, `A:A10`) are rejected with `UNSUPPORTED_REFERENCE`**, as the README says, instead of
   a `SYNTAX` error ("Unexpected character ':'").
 
+## Unreleased
+
+### Fixed
+
+- **Airtable `LEFT` / `RIGHT` / `MID` with a blank count**, checked in a real base: an empty number field or
+  `BLANK()` takes the rest of the text in `LEFT` and `MID` (`LEFT("abc", BLANK())` is `"abc"`, was `""`) and
+  gives `""` in `RIGHT`; an empty-text count is `#ERROR!` (was treated as 0).
+- `EDATE` / `EOMONTH` far past 99999-12-31 (`EDATE(DATE(2024,1,31),1E7)`) are `#NUM!` in Sheets, as documented
+  (was 35830290).
+
+### Changed
+
+- The remaining known differences are accepted and tested as `limitation` cases instead of todo: Unicode case
+  folding (`σ`/`ς`, `İ`), Sheets dates after 99999, Airtable `MID` of a real blank and `COUNTA(ERROR())`. No todo
+  cases are left.
+
 ## 0.3.0 — 2026-10-29
 
 ### Added

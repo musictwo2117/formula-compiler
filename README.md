@@ -262,8 +262,8 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - Airtable: the JS target needs `fieldTypes` to tell an empty text field from an empty number field, and an
   unchecked checkbox sent as `null` needs the type `boolean` (otherwise it reads as an empty number field; `false`
   needs no type).
-- Airtable cases that still differ (todo): `MID(BLANK(), 1, 1)` is `"1"` in Airtable, `LEFT("abc", BLANK())` is
-  `"abc"`, and `COUNTA(ERROR())` is 1 where formula-compiler gives `#ERROR!`.
+- Airtable differences kept on purpose: `MID` of a real blank returns its count (`MID(BLANK(), 1, 3)` is 3) where
+  formula-compiler gives `""`, and `COUNTA(ERROR())` is 1 where formula-compiler gives `#ERROR!`.
 - `TODAY()` / `NOW()` use the `timeZone` option, UTC by default: pass the spreadsheet's time zone (Sheets) or the
   browser's (Excel for the web), or the result is hours off. Excel was checked in Asia/Bangkok only.
 - References: only cells in the formula's own row, plus whole columns (`A:A`, `Table1[col]`) and bounded ranges

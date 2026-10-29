@@ -31,6 +31,18 @@ function textArg(g: SqlGen, x: SqlVal, blankIsEmpty = false): SqlVal {
   return g.make("text", p.v, [x.err, blankIsEmpty ? null : blankError(x), p.err]);
 }
 
+/**
+ * The count of LEFT / RIGHT / MID as SQL: NULL for a real blank (LEFT and MID take the rest of the text, RIGHT
+ * gives ''), #ERROR! for empty text (checked in Airtable 2026-10-29). Mirrors countArg() in the runtime.
+ */
+function textCountSql(g: SqlGen, x: SqlVal): SqlVal {
+  const p = g.dispatch(x, (a) => {
+    if (a.k === "blank") return a.empty ? { v: "NULL::float8", err: quoteText(ERR) } : { v: "NULL::float8", err: null };
+    return g.sem.toNumber(a);
+  });
+  return g.make("number", p.v, [x.err, p.err], true);
+}
+
 const pow10 = (d: string) => `power(10::float8, ${d})`;
 /** Math.round(v): ties toward +infinity. */
 const jsRound = (v: string) => `CASE WHEN ${v} - floor(${v}) >= 0.5 THEN ceil(${v}) ELSE floor(${v}) END`;
@@ -298,9 +310,9 @@ def({
   notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, n] = sqlArgs(c, g);
-    const k = g.toNumber(n!);
+    const k = textCountSql(g, n!);
     const t = textArg(g, s!);
-    return g.make("text", `left(${t.v}, ${clampIndex(k.v, `length(${t.v})`)})`, [k.err, t.err]);
+    return g.make("text", `CASE WHEN ${k.v} IS NULL THEN ${t.v} ELSE left(${t.v}, ${clampIndex(k.v, `length(${t.v})`)}) END`, [k.err, t.err]);
   },
 });
 def({
@@ -311,10 +323,10 @@ def({
   notes: TEXT_NOTE,
   sql: (c, g) => {
     const [s, n] = sqlArgs(c, g);
-    const k = g.toNumber(n!);
+    const k = textCountSql(g, n!);
     const t = textArg(g, s!, true);
     const start = `(length(${t.v}) - ${k.v})`;
-    return g.make("text", `CASE WHEN ${start} < 0 THEN '' ELSE substr(${t.v}, ${clampIndex(start, `length(${t.v})`)} + 1) END`, [k.err, t.err]);
+    return g.make("text", `CASE WHEN ${k.v} IS NULL OR ${start} < 0 THEN '' ELSE substr(${t.v}, ${clampIndex(start, `length(${t.v})`)} + 1) END`, [k.err, t.err]);
   },
 });
 def({
@@ -326,9 +338,14 @@ def({
   sql: (c, g) => {
     const [s, st, n] = sqlArgs(c, g);
     const start = g.toNumber(st!);
-    const k = g.toNumber(n!);
+    const k = textCountSql(g, n!);
     const t = textArg(g, s!, true);
-    return g.make("text", `CASE WHEN trunc(${start.v}) < 1 THEN '' ELSE substr(${t.v}, ${g.int(start, 1)}, ${g.int(k, 0)}) END`, [start.err, k.err, t.err]);
+    const rest = `substr(${t.v}, ${g.int(start, 1)})`;
+    return g.make(
+      "text",
+      `CASE WHEN trunc(${start.v}) < 1 THEN '' WHEN ${k.v} IS NULL THEN ${rest} ELSE substr(${t.v}, ${g.int(start, 1)}, ${g.int(k, 0)}) END`,
+      [start.err, k.err, t.err],
+    );
   },
 });
 

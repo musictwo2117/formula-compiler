@@ -125,6 +125,16 @@ function numbers(xs: Value[]): number[] | FormulaError {
   return out;
 }
 
+/**
+ * The count of LEFT / RIGHT / MID: a real blank (empty number field, BLANK()) is `undefined` (LEFT and MID take
+ * the rest of the text, RIGHT gives ""), empty text is #ERROR! (checked in Airtable 2026-10-29).
+ */
+function countArg(x: Value): number | undefined | FormulaError {
+  if (x === null) return undefined;
+  if (x === "") return err();
+  return num(x);
+}
+
 /** MIN / MAX / AVERAGE skip blanks, text and booleans. */
 function countedNumbers(xs: Value[]): number[] | FormulaError {
   const out: number[] = [];
@@ -285,26 +295,31 @@ export const airtableRuntime = {
   LOWER: (x: Value): Value => strArgs([x], (s) => s.toLowerCase()),
   TRIM: (x: Value): Value => strArgs([x], (s) => s.replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, "")),
   CONCATENATE: (...xs: Value[]): Value => strArgs(xs, (...s) => s.join(""), text),
+  /** LEFT("abc", BLANK()) is the whole text. */
   LEFT(x: Value, n: Value): Value {
-    const k = numbers([n]);
+    const k = countArg(n);
     if (isError(k)) return k;
-    return strArgs([x], (s) => substring(chars(s), 0, k[0]!));
+    return strArgs([x], (s) => (k === undefined ? s : substring(chars(s), 0, k)));
   },
-  /** RIGHT("abc", 4) is "" in Airtable. */
+  /** RIGHT("abc", 4) and RIGHT("abc", BLANK()) are "" in Airtable. */
   RIGHT(x: Value, n: Value): Value {
-    const k = numbers([n]);
+    const k = countArg(n);
     if (isError(k)) return k;
     return strArgs([x], (s) => {
+      if (k === undefined) return "";
       const c = chars(s);
-      const start = c.length - k[0]!;
+      const start = c.length - k;
       return start < 0 ? "" : substring(c, start);
     }, textOrEmpty);
   },
-  /** MID with whereToStart < 1 is "". */
+  /** MID with whereToStart < 1 is ""; a blank count takes the rest of the text. */
   MID(x: Value, start: Value, n: Value): Value {
-    const ks = numbers([start, n]);
+    const ks = numbers([start]);
     if (isError(ks)) return ks;
-    const [st, k] = [Math.trunc(ks[0]!), Math.max(0, Math.trunc(ks[1]!))];
+    const count = countArg(n);
+    if (isError(count)) return count;
+    const st = Math.trunc(ks[0]!);
+    const k = count === undefined ? Infinity : Math.max(0, Math.trunc(count));
     return strArgs([x], (s) => (st < 1 ? "" : chars(s).slice(st - 1, st - 1 + k).join("")), textOrEmpty);
   },
   /**

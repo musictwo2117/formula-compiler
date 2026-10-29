@@ -115,10 +115,16 @@ Airtable behaves much like JavaScript.
   is 0).
 - `TRIM` strips whitespace at both ends (including newlines) and keeps inner runs of spaces.
 
+- The count of `LEFT` / `RIGHT` / `MID` (checked 2026-10-29): a real blank (empty number field, `BLANK()`) takes
+  the rest of the text in `LEFT` and `MID` (`LEFT("abc", BLANK())` is `"abc"`) and gives `""` in `RIGHT`; empty
+  text (`""`, an empty text field) is `#ERROR!`. A blank start in `MID` is `""`.
+
 **Known gaps**
-- Blanks in two text functions (todo cases, checked 2026-10-29): `MID(BLANK(), 1, 1)` is `"1"` and `LEFT("abc",
-  BLANK())` is `"abc"`; formula-compiler gives `""` and `""`. `COUNTA(ERROR())` is 1 (the `ERROR()`
-  argument is counted, though an error from `{t} * 2` makes `COUNTA` an error); formula-compiler gives `#ERROR!`.
+- **Accepted:** `MID` of a real blank (empty number field, `BLANK()`) returns its count argument as a number
+  (`MID(BLANK(), 1, 3)` is 3, so `LEN` of it is `#ERROR!`); formula-compiler gives `""`, since mirroring it
+  would make `MID`'s type depend on the data. `MID` of empty text is `""` in both. `COUNTA(ERROR())` is 1 (a
+  typed `ERROR()` is counted, though an error from `{t} * 2` makes `COUNTA` an error); formula-compiler gives
+  `#ERROR!`. Both are `limitation` cases (checked 2026-10-29).
 - In JS, pass `fieldTypes` so an empty text field is `""` (needed for the `*` / `/` rule); without it an
   empty field is treated as an empty number.
 - `Number()` hex/binary forms (`"0x10"`) are not supported.
