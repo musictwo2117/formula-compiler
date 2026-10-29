@@ -3,29 +3,6 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
-## Unreleased
-
-### Fixed
-
-- **Open-ended ranges (`A2:A`, `A:A10`) are rejected with `UNSUPPORTED_REFERENCE`**, as the README says, instead of
-  a `SYNTAX` error ("Unexpected character ':'").
-
-## Unreleased
-
-### Fixed
-
-- **Airtable `LEFT` / `RIGHT` / `MID` with a blank count**, checked in a real base: an empty number field or
-  `BLANK()` takes the rest of the text in `LEFT` and `MID` (`LEFT("abc", BLANK())` is `"abc"`, was `""`) and
-  gives `""` in `RIGHT`; an empty-text count is `#ERROR!` (was treated as 0).
-- `EDATE` / `EOMONTH` far past 99999-12-31 (`EDATE(DATE(2024,1,31),1E7)`) are `#NUM!` in Sheets, as documented
-  (was 35830290).
-
-### Changed
-
-- The remaining known differences are accepted and tested as `limitation` cases instead of todo: Unicode case
-  folding (`σ`/`ς`, `İ`), Sheets dates after 99999, Airtable `MID` of a real blank and `COUNTA(ERROR())`. No todo
-  cases are left.
-
 ## 0.3.0 — 2026-10-29
 
 ### Added
@@ -48,6 +25,13 @@ while the version is 0.x, a minor release can change behaviour to match the sour
 - **Sheets `COUNTIF(range, "<>5")` no longer counts empty cells** (Excel does, and still does here); `"<>x"` still
   counts them in both.
 - Unsupported lookup functions (`OFFSET`, `HLOOKUP`, …) name the supported ones in their error message.
+- **Open-ended ranges (`A2:A`, `A:A10`) are rejected with `UNSUPPORTED_REFERENCE`**, as the README says, instead of
+  a `SYNTAX` error ("Unexpected character ':'").
+- **Airtable `LEFT` / `RIGHT` / `MID` with a blank count**, checked in a real base: an empty number field or
+  `BLANK()` takes the rest of the text in `LEFT` and `MID` (`LEFT("abc", BLANK())` is `"abc"`, was `""`) and
+  gives `""` in `RIGHT`; an empty-text count is `#ERROR!` (was treated as 0).
+- `EDATE` / `EOMONTH` far past 99999-12-31 (`EDATE(DATE(2024,1,31),1E7)`) are `#NUM!` in Sheets, as documented
+  (was 35830290).
 
 Airtable blanks, checked by field type in a real base:
 
@@ -61,6 +45,12 @@ Airtable blanks, checked by field type in a real base:
   `#ERROR!`) and `FIND` of a boolean or real blank is 0 (was 1 for a blank). `SEARCH` of a real blank is
   `#ERROR!`.
 - `AVERAGE`, `MIN` and `MAX` skip booleans; `MIN` / `MAX` with no numbers are 0 (were Infinity / -Infinity).
+
+### Changed
+
+- The remaining known differences are accepted and tested as `limitation` cases instead of todo: Unicode case
+  folding (`σ`/`ς`, `İ`), Sheets dates after 99999, Airtable `MID` of a real blank and `COUNTA(ERROR())`. No todo
+  cases are left.
 
 ## 0.2.3 — 2026-10-29
 
