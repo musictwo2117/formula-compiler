@@ -332,27 +332,49 @@ def({
   },
 });
 
-for (const name of ["FIND", "SEARCH"] as const) {
-  def({
-    name,
-    minArgs: 2,
-    maxArgs: 3,
-    summary: `${name}(stringToFind, whereToSearch, [startFromPosition])`,
-    notes:
-      name === "FIND"
-        ? "Case-sensitive; startFromPosition is 1-based; 0 when not found."
-        : "Same as FIND (case-sensitive, 0 inside expressions); a not-found SEARCH shown as the whole result is empty.",
-    sql: (c, g) => {
-      const [n, h, st] = sqlArgs(c, g);
-      const start = st ? g.toNumber(st) : g.number(1);
-      const s0 = `(${g.int(start, 1)} - 1)`;
-      const [needle, hay] = [textArg(g, n!, true), textArg(g, h!, true)];
-      const v = `CASE WHEN ${s0} > length(${hay.v}) THEN 0::float8 ELSE COALESCE((NULLIF(strpos(substr(${hay.v}, ${s0} + 1), ${needle.v}), 0) + ${s0})::float8, 0::float8) END`;
-      // SEARCH (not FIND) in a real blank is #ERROR!.
-      return g.make("number", v, [name === "SEARCH" ? blankError(h!) : null, start.err, needle.err, hay.err]);
-    },
-  });
+/** 1-based position of needle in hay from startFromPosition, 0 when not found (NULL needle: 0). */
+function findSql(start: SqlVal, needle: string, hay: string, g: SqlGen): string {
+  const s0 = `(${g.int(start, 1)} - 1)`;
+  return `CASE WHEN ${s0} > length(${hay}) THEN 0::float8 ELSE COALESCE((NULLIF(strpos(substr(${hay}, ${s0} + 1), ${needle}), 0) + ${s0})::float8, 0::float8) END`;
 }
+
+def({
+  name: "FIND",
+  minArgs: 2,
+  maxArgs: 3,
+  summary: "FIND(stringToFind, whereToSearch, [startFromPosition])",
+  notes:
+    "Case-sensitive; startFromPosition is 1-based; 0 when not found. Blank when whereToSearch is blank or empty; " +
+    "a number to find is read as text, a boolean or blank is never found.",
+  sql: (c, g) => {
+    const [n, h, st] = sqlArgs(c, g);
+    const start = st ? g.toNumber(st) : g.number(1);
+    // NULL hay: blank or empty (the result is blank); NULL needle: never found.
+    const hay = g.dispatch(h!, (a) => (a.k === "text" ? { v: a.e, err: null } : { v: "NULL::text", err: a.k === "blank" ? null : quoteText(ERR) }));
+    const needle = g.dispatch(n!, (a) => {
+      if (a.k === "text") return { v: a.e, err: null };
+      if (a.k === "number") return g.sem.toText(a);
+      return { v: a.k === "blank" && a.empty ? "''" : "NULL::text", err: null };
+    });
+    const v = `CASE WHEN ${hay.v} IS NULL THEN NULL ELSE ${findSql(start, needle.v, hay.v, g)} END`;
+    return g.make("number", v, [start.err, h!.err, hay.err, n!.err], true);
+  },
+});
+def({
+  name: "SEARCH",
+  minArgs: 2,
+  maxArgs: 3,
+  summary: "SEARCH(stringToFind, whereToSearch, [startFromPosition])",
+  notes:
+    "Case-sensitive like FIND, 0 inside expressions; both arguments must be text (a number, boolean or blank is " +
+    "#ERROR!); a not-found SEARCH shown as the whole result is empty.",
+  sql: (c, g) => {
+    const [n, h, st] = sqlArgs(c, g);
+    const start = st ? g.toNumber(st) : g.number(1);
+    const [needle, hay] = [textArg(g, n!), textArg(g, h!)];
+    return g.make("number", findSql(start, needle.v, hay.v, g), [start.err, needle.err, hay.err]);
+  },
+});
 
 def({
   name: "SUBSTITUTE",

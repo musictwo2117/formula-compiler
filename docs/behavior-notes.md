@@ -93,7 +93,7 @@ Airtable behaves much like JavaScript.
 - Numeric functions read text with `Number()`: `ABS("-3")` = 3, `ROUND("2.5", 0)` = 3.
 - Text functions (`LEN`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `RIGHT`, `MID`, `FIND`, `SEARCH`, `SUBSTITUTE`,
   `REPLACE`) reject a number or boolean as their text argument: `LEN(123.5)` is `#ERROR!`. `&` and
-  `CONCATENATE` do convert.
+  `CONCATENATE` do convert, and so does `FIND` for the text to find (below).
 - `LEN` counts code points (an emoji is 1).
 - `MID(s, start, n)` is 1-based — **the official docs example `MID("quick brown fox", 6, 5) => "brown"` is
   wrong; Airtable returns `" brow"`.** A start below 1 gives `""`.
@@ -102,15 +102,21 @@ Airtable behaves much like JavaScript.
 - `REPLACE` works like `s.substring(0, start - 1) + replacement + s.substring(start - 1 + count)`.
 - `SUBSTITUTE` with an index of 0 or less, or past the last occurrence, changes nothing.
 - `FIND` / `SEARCH`: case-sensitive (both), `startFromPosition` is 1-based (0 behaves like 1), 0 when not
-  found. A not-found `SEARCH` that is the whole formula shows as empty (that is the only difference).
+  found. A not-found `SEARCH` that is the whole formula shows as empty. They differ with blanks and
+  non-text (checked 2026-10-29):
+  - `FIND` in a blank or empty text is blank, not 0 (`FIND("a", "")`, `FIND("a", {t})`, `FIND("", BLANK())`);
+    `FIND` of a number reads it as text (`FIND(5, "a5")` = 2); `FIND` of a boolean or real blank is 0
+    (`FIND(TRUE(), "aTRUE")`, `FIND(BLANK(), "abc")`); `FIND("", "abc")` is 1; searching in a number or
+    boolean is `#ERROR!`.
+  - `SEARCH` takes text only: a number, boolean or real blank in either argument is `#ERROR!`
+    (`SEARCH(5, "a5")`, `SEARCH(BLANK(), "abc")`); `SEARCH("a", "")` is 0.
 - `SWITCH` without a match or default is blank. `T()` of anything but text is `""` (shown as empty; `LEN(T(5))`
   is 0).
 - `TRIM` strips whitespace at both ends (including newlines) and keeps inner runs of spaces.
 
 **Known gaps**
-- Blanks in a few text functions (todo cases, checked 2026-10-29): `MID(BLANK(), 1, 1)` is `"1"`,
-  `FIND(BLANK(), "abc")` is 0, `FIND("a", x)` with a blank or empty `x` is blank (not 0), and `LEFT("abc",
-  BLANK())` is `"abc"`; formula-compiler gives `""`, 1, 0 and `""`. `COUNTA(ERROR())` is 1 (the `ERROR()`
+- Blanks in two text functions (todo cases, checked 2026-10-29): `MID(BLANK(), 1, 1)` is `"1"` and `LEFT("abc",
+  BLANK())` is `"abc"`; formula-compiler gives `""` and `""`. `COUNTA(ERROR())` is 1 (the `ERROR()`
   argument is counted, though an error from `{t} * 2` makes `COUNTA` an error); formula-compiler gives `#ERROR!`.
 - In JS, pass `fieldTypes` so an empty text field is `""` (needed for the `*` / `/` rule); without it an
   empty field is treated as an empty number.

@@ -20,6 +20,9 @@ Airtable blanks, checked by field type in a real base:
 - `LEN`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `REPLACE`, `VALUE` of a real blank, `SEARCH` in one and `SUBSTITUTE`
   with one as the replacement are `#ERROR!` (were `""` / 0).
 - `T()` of a non-text value is `""` (was blank), so `LEN(T(5))` is 0.
+- `FIND` in a blank or empty text is blank (was 0), `FIND` of a number reads it as text (`FIND(5, "a5")` = 2, was
+  `#ERROR!`) and `FIND` of a boolean or real blank is 0 (was 1 for a blank). `SEARCH` of a real blank is
+  `#ERROR!`.
 - `AVERAGE`, `MIN` and `MAX` skip booleans; `MIN` / `MAX` with no numbers are 0 (were Infinity / -Infinity).
 
 ## 0.2.3 — 2026-10-29

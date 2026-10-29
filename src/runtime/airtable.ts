@@ -307,16 +307,27 @@ export const airtableRuntime = {
     const [st, k] = [Math.trunc(ks[0]!), Math.max(0, Math.trunc(ks[1]!))];
     return strArgs([x], (s) => (st < 1 ? "" : chars(s).slice(st - 1, st - 1 + k).join("")), textOrEmpty);
   },
-  /** startFromPosition is 1-based (0 behaves like 1); 0 when not found. */
+  /**
+   * startFromPosition is 1-based (0 behaves like 1); 0 when not found. Searching in a blank or empty
+   * text gives blank; a number to find is read as text, a boolean or real blank is never found.
+   */
   FIND(needle: Value, hay: Value, start?: Value): Value {
     const ks = numbers([start ?? 1]);
     if (isError(ks)) return ks;
-    const from = Math.max(Math.trunc(ks[0]!), 1) - 1;
-    return strArgs([needle, hay], (n, h) => indexOfChars(chars(h), chars(n), from) + 1, textOrEmpty);
+    if (isError(hay)) return hay;
+    if (isBlank(hay)) return null;
+    if (typeof hay !== "string") return err();
+    if (isError(needle)) return needle;
+    if (typeof needle === "number") needle = String(needle);
+    if (typeof needle !== "string") return 0;
+    return indexOfChars(chars(hay), chars(needle), Math.max(Math.trunc(ks[0]!), 1) - 1) + 1;
   },
-  /** Same as FIND, except that a blank (not empty text) to search in is #ERROR!. */
+  /** Like FIND, but both arguments must be text: a number, boolean or real blank is #ERROR!. */
   SEARCH(needle: Value, hay: Value, start?: Value): Value {
-    return hay === null ? err() : airtableRuntime.FIND(needle, hay, start);
+    const ks = numbers([start ?? 1]);
+    if (isError(ks)) return ks;
+    const from = Math.max(Math.trunc(ks[0]!), 1) - 1;
+    return strArgs([needle, hay], (n, h) => indexOfChars(chars(h), chars(n), from) + 1);
   },
   /** index <= 0 or past the last occurrence changes nothing. */
   SUBSTITUTE(x: Value, o: Value, n: Value, index?: Value): Value {
