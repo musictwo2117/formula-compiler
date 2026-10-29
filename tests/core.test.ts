@@ -91,6 +91,12 @@ describe("errors", () => {
     expect(() => compile("1", { from: "lotus" as never, to: "js" })).toThrow(/Unknown source program/);
   });
 
+  it("names the supported lookups when a lookup function is not supported", () => {
+    const e = compileError(() => compile("=1 + OFFSET(B2, C:D, 2)", { from: "excel", to: "js" }));
+    expect(e.code).toBe("UNSUPPORTED_FUNCTION");
+    expect(e.message).toBe("[Excel] Function OFFSET is not supported yet (supported lookup functions: VLOOKUP, XLOOKUP, MATCH, INDEX) (at position 6-11)");
+  });
+
   it("reports a bad timeZone or now as INVALID_OPTION, not RangeError", () => {
     for (const to of ["js", "sql"] as const) {
       const e = compileError(() => compile("=TODAY()", { from: "sheets", to, timeZone: "Asia/Bangkokk" }));

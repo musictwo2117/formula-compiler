@@ -156,7 +156,7 @@ try {
   e.functionName;  // "OFFSET"
   e.dialect;       // "excel"
   e.start, e.end;  // 5, 11
-  e.message;       // "[Excel] Function OFFSET is not supported yet (lookup and reference functions are planned) (at position 6-11)"
+  e.message;       // "[Excel] Function OFFSET is not supported yet (supported lookup functions: VLOOKUP, XLOOKUP, MATCH, INDEX) (at position 6-11)"
   e.pointer();     // "=1 + OFFSET(B2, C:D, 2)\n     ^^^^^^"
 }
 ```

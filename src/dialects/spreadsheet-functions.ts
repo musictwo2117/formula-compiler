@@ -643,7 +643,7 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
   registry.markUnsupported(variant, [
     "HLOOKUP", "LOOKUP", "XMATCH", "OFFSET", "INDIRECT", "CHOOSE",
     "FILTER", "SORT", "SORTBY", "UNIQUE", "ROW", "COLUMN", "ROWS", "COLUMNS",
-  ], "lookup and reference functions are planned");
+  ], "supported lookup functions: VLOOKUP, XLOOKUP, MATCH, INDEX");
   registry.markUnsupported(variant, ["ARRAYFORMULA", "LAMBDA", "LET", "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "SEQUENCE"], "array formulas and LAMBDA are planned");
   registry.markUnsupported(variant, [
     "SUMIFS", "COUNTIFS", "AVERAGEIF", "AVERAGEIFS", "MAXIFS", "MINIFS", "SUMPRODUCT", "COUNTBLANK", "PRODUCT",
