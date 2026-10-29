@@ -252,7 +252,7 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
   const toCalendar = (v: Value): Value => (typeof v === "number" ? fromRealSerial(v, variant) : v);
   const dateColumn = (ctx: EvalContext | undefined, name: string, type?: string, first?: number, count?: number): RefArg => {
     const c = column(ctx, name, type, first, count);
-    return type === "date" ? { ref: true, values: c.values.map(toCalendar) } : c;
+    return type === "date" ? { ...c, values: c.values.map(toCalendar) } : c;
   };
   const A = (a: Value, b: Value, f: (x: number, y: number) => number | FormulaError) => arith(a, b, f, variant);
   const N = (x: Value) => toNumber(x, variant);
@@ -412,7 +412,8 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
     COUNTIF(range: RefArg, criterion: Value): Value {
       if (isError(criterion)) return criterion;
       const c = parseCriterion(criterion, variant);
-      return range.values.filter((v) => matchesCriterion(v, c, variant)).length;
+      const blanks = range.blanks && matchesCriterion(null, c, variant) ? range.blanks : 0;
+      return range.values.filter((v) => matchesCriterion(v, c, variant)).length + blanks;
     },
     SUMIF(range: RefArg, criterion: Value, sumRange?: RefArg): Value {
       if (isError(criterion)) return criterion;

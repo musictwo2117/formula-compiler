@@ -33,6 +33,15 @@ describe("cli", () => {
     expect(r.err).toContain("^");
   });
 
+  it("passes the table, row order and time zone to SQL", () => {
+    const r = cli("=SUM(B2:B10)", "--from", "sheets", "--to", "sql", "--columns", "B=sales:number", "--table", "orders", "--order-by", "id");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('FROM "orders" AS "__fc_r" WHERE "__fc_r"."id" <=');
+    const t = cli("=TODAY()", "--from", "excel", "--to", "sql", "--time-zone", "Asia/Bangkok", "--now", "2026-10-29T00:00:00Z");
+    expect(t.out).toContain("46324");
+    expect(cli("=TODAY()", "--from", "excel", "--time-zone", "Asia/Bangkok", "--now", "2026-10-29T00:00:00Z", "--eval", "{}").out).toBe("46324");
+  });
+
   it("supports the ; locale", () => {
     const r = cli("=ROUND(2,5;0)", "--from", "excel", "--separator", ";", "--decimal", ",", "--eval", "{}");
     expect(r.out).toBe("3");

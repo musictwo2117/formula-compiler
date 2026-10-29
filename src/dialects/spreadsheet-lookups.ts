@@ -26,7 +26,7 @@ function rowSource(g: SqlGen, range: Span & { rows?: RowSpan }) {
   if (!orderBy) {
     return g.fail("INVALID_OPTION", "Lookups need the row order in SQL: pass orderBy (a field that numbers the rows)", span.start, span.end);
   }
-  const from = g.rangeFrom(range.rows, span);
+  const scan = g.rangeScan(range.rows, span);
   const order = `${R}.${quoteIdent(orderBy)}`;
   const col = (name: string): { v: string; t: FieldType } => {
     const t = g.fieldType(name, span);
@@ -41,7 +41,7 @@ function rowSource(g: SqlGen, range: Span & { rows?: RowSpan }) {
     const base = range.rows ? 1 - range.rows.first : headerRow + 1;
     return `(SELECT (count(*) + ${base})::float8 FROM ${quoteIdent(table)} AS "__fc_p" WHERE "__fc_p".${quoteIdent(orderBy)} < ${key})`;
   };
-  return { from, order, col, position };
+  return { scan, order, col, position };
 }
 
 /**
@@ -83,10 +83,10 @@ function lookupSql(g: SqlGen, key: SqlVal, range: Range, lookupName: string, ret
   const look = src.col(lookupName);
   const ret = src.col(retName);
   const cond = g.dispatch(key, (k) => ({ v: matchSql(look.v, look.t, k, mode), err: null })).v;
-  const pick = (what: string) => `(SELECT ${what} FROM ${src.from} WHERE ${cond} ORDER BY ${orderSql(look.v, look.t, src.order, mode, fromEnd)} LIMIT 1)`;
+  const pick = (what: string) => `(SELECT ${what} ${src.scan(cond)} ORDER BY ${orderSql(look.v, look.t, src.order, mode, fromEnd)} LIMIT 1)`;
   const found: SqlVal = { v: pick(ret.v), t: ret.t === "date" ? "number" : ret.t, err: key.err, nullable: true };
   // The key's own error wins over "not found".
-  const exists: SqlVal = { v: `EXISTS (SELECT 1 FROM ${src.from} WHERE ${cond})`, t: "boolean", err: key.err, nullable: false };
+  const exists: SqlVal = { v: `EXISTS (SELECT 1 ${src.scan(cond)})`, t: "boolean", err: key.err, nullable: false };
   return { found, exists, src, pick };
 }
 
@@ -215,7 +215,7 @@ export function registerSpreadsheetLookups(variant: SpreadsheetVariant): void {
         if (ci < 1) return g.make("number", "NULL::float8", [...errs, quoteText("#VALUE!")], true);
         if (ci > names.length) return g.make("number", "NULL::float8", [...errs, quoteText("#REF!")], true);
         const ret = src.col(names[ci - 1]!);
-        const v = `CASE WHEN ${r} BETWEEN 1 AND ${range.rows.count} THEN (SELECT ${ret.v} FROM ${src.from} ORDER BY ${src.order} OFFSET (${r} - 1)::bigint LIMIT 1) END`;
+        const v = `CASE WHEN ${r} BETWEEN 1 AND ${range.rows.count} THEN (SELECT ${ret.v} ${src.scan()} ORDER BY ${src.order} OFFSET (${r} - 1)::bigint LIMIT 1) END`;
         return g.make(ret.t as SqlVal["t"], v, [...errs, `CASE WHEN ${r} > ${range.rows.count} THEN ${quoteText(indexPast)} END`], true);
       }
       if (ci < 1) return g.error("#VALUE!");
@@ -224,7 +224,7 @@ export function registerSpreadsheetLookups(variant: SpreadsheetVariant): void {
       const ret = src.col(names[ci - 1]!);
       // Data row k (1-based) is OFFSET k - 1; header rows and rows past the end are blank.
       const k = `(trunc(${row.v}) - ${headerRow(g)})`;
-      const v = `CASE WHEN ${k} >= 1 THEN (SELECT ${ret.v} FROM ${src.from} ORDER BY ${src.order} OFFSET LEAST(${k} - 1, 1e15)::bigint LIMIT 1) END`;
+      const v = `CASE WHEN ${k} >= 1 THEN (SELECT ${ret.v} ${src.scan()} ORDER BY ${src.order} OFFSET LEAST(${k} - 1, 1e15)::bigint LIMIT 1) END`;
       return g.make(ret.t as SqlVal["t"], v, [row.err, `CASE WHEN trunc(${row.v}) < 1 THEN '#VALUE!' END`], true);
     },
   });

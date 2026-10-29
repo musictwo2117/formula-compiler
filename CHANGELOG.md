@@ -3,15 +3,20 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
-## Unreleased
+## 0.3.0 — 2026-10-29
 
 ### Added
 
 - **Bounded ranges (Google Sheets, Excel):** `SUM(A2:A10)`, `COUNTIF(A2:A10, ">5")`, `VLOOKUP(x, D2:F10, 2, FALSE)`
   and the other aggregates and lookups that took whole columns. Rows count from the header row; rows past the
   data are empty cells. In SQL they need `orderBy`. Checked in Sheets and Excel for the web (44 cases).
+  A range far past the data stays cheap (`SUM(A2:A1000000)` over 1,000 rows: 0.05 ms in JS). In SQL a range is
+  the rows between two `orderBy` keys computed once per query, so it costs about the same as a whole column and
+  lookups can use the lookup column's index. Excel ranges past row 1,048,576 are rejected.
 - **Airtable `COUNT`, `COUNTA` and `COUNTALL`** with plain arguments (JS and SQL). Rollup and lookup fields
   are still not supported.
+- **CLI flags `--order-by`, `--table-alias`, `--time-zone` and `--now`**, so bounded ranges, lookups and
+  `TODAY()` / `NOW()` work from the command line.
 - **CI runs every SQL case on real PostgreSQL 15, 16, 17 and 18** (en_US.UTF-8), besides PGlite. PostgreSQL 15
   is the oldest supported version. `FC_TEST_DATABASE_URL` points the tests at a server.
 

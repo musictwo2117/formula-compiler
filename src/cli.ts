@@ -9,7 +9,12 @@ Options:
   --columns <map>         Column letters to field names, optionally typed:
                           B=income,C=age  or  B=income:number,C=name:text
   --types <map>           Field types for SQL: income=number,name=text,ok=boolean
-  --table <name>          SQL table for whole-column ranges (A:A)
+  --table <name>          SQL table for ranges (A:A, A2:A10) and lookups
+  --order-by <field>      SQL field that gives the row order (unique, not null);
+                          needed by bounded ranges (A2:A10) and lookups
+  --table-alias <name>    SQL alias of the outer row (default: the table)
+  --time-zone <zone>      IANA time zone for TODAY() / NOW() (default UTC)
+  --now <iso>             Fixed "now" for TODAY() / NOW() (SQL; JS --eval too)
   --sheet <name>          Name of the sheet the formula is on
   --header-row <n>        Header row (default 1); formula row defaults to n + 1
   --current-row <n>       Row the formula is on
@@ -22,6 +27,7 @@ Options:
 Examples:
   formula-compiler "=IF(B2>30000, \\"ok\\", \\"no\\")" --from excel --to sql --columns B=income:number
   formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to js --eval '{"Age": 30}'
+  formula-compiler "=SUM(B2:B10)" --from sheets --to sql --columns B=sales:number --table orders --order-by id
 `;
 
 const FIELD_TYPES: readonly FieldType[] = ["number", "text", "boolean", "date"];
@@ -60,6 +66,10 @@ export function run(argv: string[], out: (s: string) => void, err: (s: string) =
         columns: { type: "string" },
         types: { type: "string" },
         table: { type: "string" },
+        "order-by": { type: "string" },
+        "table-alias": { type: "string" },
+        "time-zone": { type: "string" },
+        now: { type: "string" },
         sheet: { type: "string" },
         "header-row": { type: "string" },
         "current-row": { type: "string" },
@@ -96,6 +106,10 @@ export function run(argv: string[], out: (s: string) => void, err: (s: string) =
     if (v.types) for (const [name, type] of parsePairs(v.types, "--types")) fieldTypes[name] = fieldType(type, "--types");
     if (Object.keys(fieldTypes).length) options.fieldTypes = fieldTypes;
     if (v.table) options.table = v.table;
+    if (v["order-by"]) options.orderBy = v["order-by"];
+    if (v["table-alias"]) options.tableAlias = v["table-alias"];
+    if (v["time-zone"]) options.timeZone = v["time-zone"];
+    if (v.now) options.now = v.now;
     if (v.sheet) options.sheetName = v.sheet;
     const headerRow = positiveInt(v["header-row"], "--header-row");
     const currentRow = positiveInt(v["current-row"], "--current-row");
@@ -118,7 +132,7 @@ export function run(argv: string[], out: (s: string) => void, err: (s: string) =
         } catch {
           throw new UsageError("--eval must be a JSON object");
         }
-        const value = result.evaluate(record);
+        const value = result.evaluate(record, v.now ? { now: v.now } : undefined);
         out(JSON.stringify(isError(value) ? { error: value.code } : value));
       } else {
         out(v.json ? JSON.stringify({ code: result.code }, null, 2) : result.code);

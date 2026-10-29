@@ -17,6 +17,8 @@ export type Value = number | string | boolean | null | FormulaError;
 export interface RefArg {
   readonly ref: true;
   readonly values: readonly Value[];
+  /** Empty cells after `values` (a bounded range that reaches past the data), kept as a count. */
+  readonly blanks?: number;
 }
 
 export interface EvalContext {
@@ -69,14 +71,16 @@ export function dateField(raw: unknown, field: string): Value {
   return msToSerial(ms);
 }
 
-/** A whole column, or `count` rows from data row `first` (rows past the data are blank, as in a sheet). */
+/**
+ * A whole column, or `count` rows from data row `first`. Rows past the data are empty cells, as in a sheet;
+ * they are only counted (`blanks`), so A2:A1000000 over a small table stays cheap.
+ */
 export function column(ctx: EvalContext | undefined, field: string, type?: string, first?: number, count?: number): RefArg {
   if (!ctx?.rows) throw new TypeError(`The formula uses a range of "${field}"; pass ctx.rows`);
   const read = type === "date" ? dateField : normalize;
   if (first === undefined || count === undefined) return { ref: true, values: ctx.rows.map((r) => read(r[field], field)) };
-  const values: Value[] = [];
-  for (let i = first; i < first + count; i++) values.push(i < ctx.rows.length ? read(ctx.rows[i]![field], field) : null);
-  return { ref: true, values };
+  const values = ctx.rows.slice(first, first + count).map((r) => read(r[field], field));
+  return { ref: true, values, blanks: count - values.length };
 }
 
 /** Numeric text as accepted by the coercion rules (both JS and SQL use this pattern). */

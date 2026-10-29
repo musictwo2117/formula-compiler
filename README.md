@@ -176,8 +176,8 @@ npx @musictwo2117/formula-compiler "IF({Age} < 60, 'yes')" --from airtable --to 
 
 `--columns B=income,C=age` maps columns; add `:number` / `:text` / `:boolean` / `:date` (or `--types income=number`)
 for the SQL target, which needs field types. Other flags: `--table`, `--sheet`, `--header-row`, `--current-row`,
-`--separator ";"`, `--decimal ","`, `--json`. Run `--help` for details. The CLI has no `orderBy`, `timeZone` or
-`now` flags yet; use the library for SQL lookups and for `TODAY()` / `NOW()` outside UTC.
+`--order-by`, `--table-alias`, `--time-zone`, `--now`, `--separator ";"`, `--decimal ","`, `--json`. Run `--help`
+for details.
 
 ## Supported functions
 
@@ -258,8 +258,14 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 ## Limitations
 
 - **Every rule was checked against the real programs** (Airtable, Google Sheets and Excel for the web,
-  2026-10-28). See [docs/behavior-notes.md](docs/behavior-notes.md).
-- Airtable: the JS target needs `fieldTypes` to tell an empty text field from an empty number field.
+  2026-10-28 and 2026-10-29). See [docs/behavior-notes.md](docs/behavior-notes.md).
+- Airtable: the JS target needs `fieldTypes` to tell an empty text field from an empty number field, and an
+  unchecked checkbox sent as `null` needs the type `boolean` (otherwise it reads as an empty number field; `false`
+  needs no type).
+- Airtable cases that still differ (todo): `MID(BLANK(), 1, 1)` is `"1"` in Airtable, `LEFT("abc", BLANK())` is
+  `"abc"`, and `COUNTA(ERROR())` is 1 where formula-compiler gives `#ERROR!`.
+- `TODAY()` / `NOW()` use the `timeZone` option, UTC by default: pass the spreadsheet's time zone (Sheets) or the
+  browser's (Excel for the web), or the result is hours off. Excel was checked in Asia/Bangkok only.
 - References: only cells in the formula's own row, plus whole columns (`A:A`, `Table1[col]`) and bounded ranges
   (`A2:A10`) inside aggregates and lookups (multi-column `D:F` / `D2:F10` only as the `VLOOKUP` / `INDEX`
   table). Other rows, other sheets, whole rows, open-ended ranges (`A2:A`) and ranges that include the header row
@@ -271,10 +277,12 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - Text outside ASCII: case-insensitive comparisons lower-case both sides, so a few letters (`σ`/`ς`, `İ`) differ
   from Google Sheets and between JS and SQL. See [docs/behavior-notes.md](docs/behavior-notes.md).
 - Not yet: `HLOOKUP`/`LOOKUP`/`XMATCH`/`OFFSET`, `ARRAYFORMULA`, `LAMBDA`, array literals, named ranges,
-  omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields.
+  omitted arguments (`IF(A1,,1)`), Airtable lookup/rollup (array) fields (`COUNT` / `COUNTA` / `COUNTALL` work on
+  plain values).
 - SQL lookups need the `orderBy` option, and their match mode, column index and search mode must be literals.
   An index on the lookup column makes `VLOOKUP` / `XLOOKUP` fast; `MATCH` and `INDEX` positions cost time in
-  proportion to the row number.
+  proportion to the row number. Bounded ranges read the rows between two `orderBy` keys, so an index on the
+  `orderBy` field keeps small ranges of a big table fast.
 - Google Sheets dates after 99999-12-31 are `#NUM!` here; Sheets still gives a number.
 - SQL: literal `COUNTIF`/`SUMIF` criteria (`">5"`, `"a*"`) compile to plain SQL; computed ones (`">"&C2`)
   are parsed per row by PostgreSQL, which gives a much longer expression. Very large numbers can overflow `double precision` and raise a PostgreSQL error. The SQL repeats

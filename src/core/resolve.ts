@@ -10,6 +10,9 @@ export interface ResolveContext {
   fail: Fail;
 }
 
+/** Excel's sheets have 1,048,576 rows. */
+const EXCEL_MAX_ROW = 1_048_576;
+
 const AGGREGATE_HINT = "ranges are only supported as arguments of aggregate and lookup functions such as SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF and VLOOKUP";
 
 /**
@@ -90,6 +93,9 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
             return fail("UNSUPPORTED_REFERENCE", `Range ${text}: open-ended ranges are not supported yet; use whole columns (A:A) or both rows (A2:A10)`, node.start, node.end);
           }
           const [top, bottom] = [node.from.row, node.to.row].sort((x, y) => x - y) as [number, number];
+          if (dialect === "excel" && bottom > EXCEL_MAX_ROW) {
+            return fail("UNSUPPORTED_REFERENCE", `Range ${text} goes past Excel's last row (${EXCEL_MAX_ROW})`, node.start, node.end);
+          }
           if (top <= headerRow) {
             return fail(
               "UNSUPPORTED_REFERENCE",

@@ -288,6 +288,25 @@ describe("SQL lookups", () => {
     expect(res.rows[0]).toEqual({ v: expected, e: null });
   });
 
+  it("keeps a bounded range past the data cheap in JS", () => {
+    // Rows past the data are counted, not built: A2:A900000000 used to throw RangeError (array length).
+    const sheets = { ...options, from: "sheets" as const, to: "js" as const };
+    expect(compile("=SUM(C2:C900000000)", sheets).evaluate(rows[0]!, { rows })).toBe(60);
+    expect(compile("=COUNTIF(C2:C900000000,\"\")", sheets).evaluate(rows[0]!, { rows })).toBe(900000000 - 1 - 3);
+    const e = compileError(() => compile("=SUM(C2:C1048577)", { ...options, to: "js" }));
+    expect([e.code, e.reason]).toEqual(["UNSUPPORTED_REFERENCE", "Range C2:C1048577 goes past Excel's last row (1048576)"]);
+  });
+
+  it("bounds a bounded range by orderBy keys computed once, so indexes still work", async () => {
+    // A sorted slice in every subquery made VLOOKUP over A2:B5001 five times slower than over A:B.
+    const sql = compile("=VLOOKUP(C2,C3:C4,1,FALSE)", { ...options, to: "sql" });
+    expect(sql.sql).not.toMatch(/OFFSET \d+ LIMIT \d+\) AS "__fc_r"/);
+    await db.exec("SET enable_seqscan = off");
+    const plan = await db.query<{ "QUERY PLAN": string }>(`EXPLAIN SELECT ${sql.sql} FROM "fruit"`);
+    await db.exec("RESET enable_seqscan");
+    expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/Index (Only )?Scan using fruit_price_idx/);
+  });
+
   it("counts bounded-range rows from the headerRow option", () => {
     const opts = { ...options, headerRow: 3, to: "js" as const };
     expect(compile("=SUM(C4:C5)", opts).evaluate(rows[0]!, { rows })).toBe(30);

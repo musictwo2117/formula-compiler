@@ -409,17 +409,32 @@ export class SqlGen {
   }
 
   /**
-   * FROM item of a range, aliased "__fc_r": the whole table, or for a bounded range (A2:A10) its rows in orderBy
-   * order. Rows past the data are simply missing; callers that count blanks add them back.
+   * `FROM table AS "__fc_r" [WHERE ...]` over a range: the whole table, or for a bounded range (A2:A10) the rows
+   * whose orderBy value lies between the first and last row's. Those two keys are subqueries that do not refer to
+   * the outer row, so PostgreSQL computes them once per query, and the scan can still use indexes. Rows past the
+   * data are simply missing; callers that count blanks add them back.
    */
-  rangeFrom(rows: RowSpan | undefined, span: Span): string {
+  rangeScan(rows: RowSpan | undefined, span: Span): (cond?: string) => string {
     const { table, orderBy } = this.options;
     if (!table) return this.fail("INVALID_OPTION", `Ranges need the SQL table name: pass the table option`, span.start, span.end);
-    if (!rows) return `${quoteIdent(table)} AS ${INNER}`;
-    if (!orderBy) {
-      return this.fail("INVALID_OPTION", "Bounded ranges (A2:A10) need the row order in SQL: pass orderBy (a field that numbers the rows)", span.start, span.end);
+    const from = `FROM ${quoteIdent(table)} AS ${INNER}`;
+    const conds: string[] = [];
+    if (rows) {
+      if (!orderBy) {
+        return this.fail("INVALID_OPTION", "Bounded ranges (A2:A10) need the row order in SQL: pass orderBy (a field that numbers the rows)", span.start, span.end);
+      }
+      const ob = quoteIdent(orderBy);
+      const key = (offset: number) => `(SELECT "__fc_k".${ob} FROM ${quoteIdent(table)} AS "__fc_k" ORDER BY "__fc_k".${ob} OFFSET ${offset} LIMIT 1)`;
+      if (rows.first > 0) conds.push(`${INNER}.${ob} >= ${key(rows.first)}`);
+      // The largest key among the first first + count rows: the range's last row, or the table's last row when the
+      // range runs past the data. A plain comparison, so it can bound an index scan.
+      const end = rows.first + rows.count;
+      conds.push(`${INNER}.${ob} <= (SELECT max("__fc_k".${ob}) FROM (SELECT ${ob} FROM ${quoteIdent(table)} ORDER BY ${ob} LIMIT ${end}) AS "__fc_k")`);
     }
-    return `(SELECT * FROM ${quoteIdent(table)} ORDER BY ${quoteIdent(orderBy)} OFFSET ${rows.first} LIMIT ${rows.count}) AS ${INNER}`;
+    return (cond) => {
+      const all = cond ? [...conds, cond] : conds;
+      return all.length ? `${from} WHERE ${all.join(" AND ")}` : from;
+    };
   }
 
   /** `(SELECT agg FROM table AS "__fc_r")` — agg receives the inner column expression. */
@@ -429,12 +444,11 @@ export class SqlGen {
     select: (col: string, type: FieldType) => string,
     where?: (col: string, type: FieldType) => string,
   ): string {
-    const from = this.rangeFrom(range.rows, range);
+    const scan = this.rangeScan(range.rows, range);
     const raw = this.fieldType(name, range);
     // Date columns take part as serial numbers.
     const [col, type]: [string, FieldType] = raw === "date" ? [this.dateFieldSerial(this.innerColumn(name)), "number"] : [this.innerColumn(name), raw];
-    const w = where ? ` WHERE ${where(col, type)}` : "";
-    return `(SELECT ${select(col, type)} FROM ${from}${w})`;
+    return `(SELECT ${select(col, type)} ${scan(where ? where(col, type) : undefined)})`;
   }
 
   // ---- kinds & coercion
