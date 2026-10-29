@@ -25,6 +25,8 @@ export interface SqlVal {
   nullable: boolean;
   /** Set for literals so coercions can be folded at compile time. */
   lit?: number | string | boolean;
+  /** The runtime kinds, when cheaper than the generic ones for t (an Airtable checkbox). */
+  kinds?: KindArm[];
 }
 
 export type Kind = "blank" | "number" | "text" | "boolean";
@@ -36,6 +38,8 @@ export interface KindArm {
   when: string | null;
   e: string;
   lit?: number | string | boolean;
+  /** A blank arm that is empty text, not a real blank (Airtable treats "" as blank, but not always). */
+  empty?: true;
 }
 
 export interface Part {
@@ -420,11 +424,15 @@ export class SqlGen {
   // ---- kinds & coercion
   kinds(x: SqlVal): KindArm[] {
     const blankWhen = (e: string, extra?: string) => (extra ? `(${e} IS NULL OR ${extra})` : `${e} IS NULL`);
+    if (x.kinds) return x.kinds;
     if (x.t === "blank") return [{ k: "blank", when: null, e: "NULL" }];
     if (x.t === "any") {
-      const empty = this.sem.emptyTextIsBlank ? `${x.v} = '""'::jsonb` : undefined;
+      // Airtable: a real blank (NULL) and empty text are both blank, but compare differently.
+      const blanks: KindArm[] = this.sem.emptyTextIsBlank
+        ? [{ k: "blank", when: `${x.v} IS NULL`, e: "NULL" }, { k: "blank", when: `${x.v} = '""'::jsonb`, e: "NULL", empty: true }]
+        : [{ k: "blank", when: blankWhen(x.v), e: "NULL" }];
       return [
-        { k: "blank", when: blankWhen(x.v, empty), e: "NULL" },
+        ...blanks,
         { k: "number", when: `jsonb_typeof(${x.v}) = 'number'`, e: `(${x.v})::float8` },
         { k: "text", when: `jsonb_typeof(${x.v}) = 'string'`, e: `(${x.v} #>> '{}')` },
         { k: "boolean", when: null, e: `(${x.v})::boolean` },
@@ -433,9 +441,10 @@ export class SqlGen {
     const arm: KindArm = { k: x.t, when: null, e: x.v };
     if (x.lit !== undefined) arm.lit = x.lit;
     if (x.t === "text" && this.sem.emptyTextIsBlank) {
-      if (x.lit === "") return [{ k: "blank", when: null, e: "NULL" }];
-      if (x.lit === undefined) return [{ k: "blank", when: blankWhen(x.v, `${x.v} = ''`), e: "NULL" }, arm];
-      return [arm];
+      if (x.lit === "") return [{ k: "blank", when: null, e: "NULL", empty: true }];
+      if (x.lit !== undefined) return [arm];
+      const empty: KindArm = { k: "blank", when: `${x.v} = ''`, e: "NULL", empty: true };
+      return x.nullable ? [{ k: "blank", when: `${x.v} IS NULL`, e: "NULL" }, empty, arm] : [empty, arm];
     }
     return x.nullable ? [{ k: "blank", when: blankWhen(x.v), e: "NULL" }, arm] : [arm];
   }
@@ -479,12 +488,25 @@ export class SqlGen {
   }
 
   compare(op: BinaryOperator, a: SqlVal, b: SqlVal): SqlVal {
+    const relational = op !== "=" && op !== "<>";
+    // Airtable compares a real blank with text as the number 0 in < > <= >= (NULL < 'a' is false).
+    const blankVsText = this.sem.emptyTextIsBlank && relational;
+    const result = this.compareValues(op, a, b, blankVsText);
+    if (!this.sem.emptyTextIsBlank || op !== "<>" || !(a.nullable || b.nullable)) return result;
+    // Airtable's != keeps a real blank apart from "" and 0 (where = says they are equal).
+    const isNull = (x: SqlVal) => (!x.nullable ? "FALSE" : x.t === "blank" ? "TRUE" : `${x.v} IS NULL`);
+    const differ = !a.nullable ? isNull(b) : !b.nullable ? isNull(a) : `(${isNull(a)}) <> (${isNull(b)})`;
+    if (differ === "TRUE") return this.make("boolean", "TRUE", [a.err, b.err]);
+    return this.make("boolean", `(${differ} OR ${result.v})`, [result.err]);
+  }
+
+  private compareValues(op: BinaryOperator, a: SqlVal, b: SqlVal, blankVsText: boolean): SqlVal {
     const defaults: Record<Exclude<Kind, "blank">, KindArm> = {
       number: { k: "number", when: null, e: "0::float8", lit: 0 },
       text: { k: "text", when: null, e: "''", lit: "" },
       boolean: { k: "boolean", when: null, e: "FALSE", lit: false },
     };
-    if (a.t === b.t && a.t !== "any" && a.t !== "blank") {
+    if (a.t === b.t && a.t !== "any" && a.t !== "blank" && !(blankVsText && a.t === "text" && (a.nullable || b.nullable))) {
       // Same static type: blank becomes that type's empty value on either side.
       const fill = (x: SqlVal): KindArm => {
         const arm: KindArm = { k: a.t as Kind, when: null, e: x.nullable ? `COALESCE(${x.v}, ${defaults[a.t as Exclude<Kind, "blank">].e})` : x.v };
@@ -495,8 +517,9 @@ export class SqlGen {
     }
     const p = this.dispatch2(a, b, (x, y) => {
       if (x.k === "blank" && y.k === "blank") return { v: opResult(op, 0), err: null };
-      if (x.k === "blank") x = defaults[y.k as Exclude<Kind, "blank">];
-      if (y.k === "blank") y = defaults[x.k as Exclude<Kind, "blank">];
+      const fill = (blank: KindArm, other: KindArm) => defaults[other.k === "text" && blankVsText && !blank.empty ? "number" : (other.k as Exclude<Kind, "blank">)];
+      if (x.k === "blank") x = fill(x, y);
+      if (y.k === "blank") y = fill(y, x);
       return { v: x.k === y.k ? this.sem.compareSame(op, x, y) : this.sem.compareMixed(op, x, y), err: null };
     });
     return this.make("boolean", p.v, [a.err, b.err, p.err]);
@@ -552,9 +575,14 @@ export class SqlGen {
         const t = this.fieldType(name, n);
         const ref = this.fieldRef(name);
         if (this.dialect === "airtable") {
-          // Airtable: an empty text field is "", an unchecked checkbox is blank.
+          // Airtable: an empty text field is "".
           if (t === "text") return { v: `COALESCE(${ref}, '')`, t, err: null, nullable: false };
-          if (t === "boolean") return { v: `NULLIF(${ref}, FALSE)`, t, err: null, nullable: true };
+          if (t === "boolean") {
+            // An unchecked checkbox is empty text ({chk} * 2 is #ERROR!), a checked one is TRUE.
+            const off: KindArm = { k: "blank", when: `NOT COALESCE(${ref}, FALSE)`, e: "NULL", empty: true };
+            const kinds: KindArm[] = [off, { k: "boolean", when: null, e: "TRUE" }];
+            return { v: `CASE WHEN ${ref} THEN 'true'::jsonb ELSE '""'::jsonb END`, t: "any", err: null, nullable: false, kinds };
+          }
         }
         if (t === "date") return { v: this.dateFieldSerial(ref), t: "number", err: null, nullable: true };
         return { v: ref, t, err: null, nullable: true };

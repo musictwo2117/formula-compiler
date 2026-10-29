@@ -1,6 +1,7 @@
 # Behavior notes
 
-How formula-compiler reproduces each program. Every rule here was checked on 2026-10-28 by running the
+How formula-compiler reproduces each program. Every rule here was checked on 2026-10-28 (blanks by field type, `COUNT` and `TODAY()`/`NOW()` time zones on
+2026-10-29) by running the
 formulas in the real program and reading the computed values: a real **Airtable** base, a real
 **Google Sheet**, and **Excel for the web**. The cases named "(checked in … 2026-10-28)" in
 `tests/cases/*.json` are those probes; there are no unverified cases left.
@@ -42,8 +43,22 @@ Airtable behaves much like JavaScript.
   `NaN`, `2 + 3 & "x"` is `"5x"`), then comparisons.
 
 **Blanks and booleans**
-- An empty field, `""` and `BLANK()` are the same: `{x} = ""`, `{n} = 0` and `BLANK() = 0` are all true.
-- An unchecked checkbox is blank. `TRUE()` is 1 in arithmetic; booleans become `"TRUE"` / `"FALSE"` as text.
+- An empty field, `""` and `BLANK()` are equal: `{x} = ""`, `{n} = 0`, `BLANK() = 0` and `BLANK() = FALSE()` are
+  all true. But a blank is not always the same as `""` (checked by field type on 2026-10-29):
+  - An empty **number or currency** field, `BLANK()` and `IF` without its third argument are a *real* blank.
+    An empty **text, long text or single select** field and an **unchecked checkbox** are empty text `""`.
+  - `!=` is not the opposite of `=`: a real blank is only "not different" from another real blank. `{n} != ""`,
+    `{n} != 0` and `BLANK() != ""` are true; `{t} != ""` and `{t} != 0` (empty text) are false.
+  - Against text, `<` `>` `<=` `>=` read a real blank as the number 0 and the text with `Number()`:
+    `{n} < "a"` and `BLANK() <= "a"` are false, `BLANK() < "1"` is true; empty text sorts first (`{t} < "a"`).
+  - `*` and `/` are `#ERROR!` for empty text (`{t} * 2`, unchecked `{chk} * 2`) but 0 for a real blank.
+  - Text functions reject a real blank: `LEN`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `REPLACE` and `VALUE` of
+    `BLANK()` or an empty number field, `SEARCH` in it and `SUBSTITUTE` with it as the replacement are
+    `#ERROR!`. `RIGHT(BLANK(), 1)` and `SUBSTITUTE(BLANK(), "a", "b")` are `""`; `&` and `CONCATENATE` give `""`.
+    `LEN` of empty text is 0.
+  - `IF`, `NOT`, `SUM`, `AVERAGE` treat both the same (false, 0, skipped).
+- A checked checkbox is `TRUE`: `{chk} * 2` = 2, `{chk} = 1` is true, `LEN({chk})` is `#ERROR!`.
+- `TRUE()` is 1 in arithmetic; booleans become `"TRUE"` / `"FALSE"` as text.
 - `IF(cond, value)` without a third argument is blank; `IF` treats 0, `""`, blank and NaN as false.
 
 **Arithmetic**
@@ -66,7 +81,12 @@ Airtable behaves much like JavaScript.
   (`ROUNDUP(0.1 + 0.2, 1)` = 0.4).
 - `MOD(a, b)` is `|a| mod |b|` with the sign of the divisor: `MOD(-7, 3)` = 1, `MOD(7, -3)` = -1.
 - `SUM` counts blanks as 0 and numeric text as numbers (`SUM("2", 1)` = 3), skipping other text.
-  `AVERAGE`, `MIN`, `MAX` skip blanks and text (`AVERAGE(2, 4, blank)` = 3, `AVERAGE(blank)` = NaN).
+  `AVERAGE`, `MIN`, `MAX` skip blanks, text and booleans (`AVERAGE(2, 4, blank)` = 3, `AVERAGE(TRUE(), 2)` = 2,
+  `AVERAGE(blank)` = NaN); `MIN` / `MAX` with no numbers are 0.
+- `COUNT` counts numbers (NaN and Infinity too, not numeric text or booleans), `COUNTA` counts everything but
+  blanks and empty text (`FALSE()` and 0 count, an unchecked checkbox does not), `COUNTALL` counts every
+  argument. An error argument is the result (`COUNT(ERROR())` is `#ERROR!`). Only plain arguments are
+  supported; rollup and lookup (array) fields are not.
 - `VALUE(text)` keeps only digits and `.`; any `-` makes it negative and `%` divides by 100:
   `VALUE("$1,000")` = 1000, `VALUE("a1b2")` = 12, `VALUE("1.5e3")` = 1.53, `VALUE("5-3")` = -53,
   `VALUE("abc")` = 0, `VALUE("1.2.3")` = NaN.
@@ -83,10 +103,15 @@ Airtable behaves much like JavaScript.
 - `SUBSTITUTE` with an index of 0 or less, or past the last occurrence, changes nothing.
 - `FIND` / `SEARCH`: case-sensitive (both), `startFromPosition` is 1-based (0 behaves like 1), 0 when not
   found. A not-found `SEARCH` that is the whole formula shows as empty (that is the only difference).
-- `SWITCH` without a match or default is blank. `T()` of a checkbox, number or blank is blank.
+- `SWITCH` without a match or default is blank. `T()` of anything but text is `""` (shown as empty; `LEN(T(5))`
+  is 0).
 - `TRIM` strips whitespace at both ends (including newlines) and keeps inner runs of spaces.
 
 **Known gaps**
+- Blanks in a few text functions (todo cases, checked 2026-10-29): `MID(BLANK(), 1, 1)` is `"1"`,
+  `FIND(BLANK(), "abc")` is 0, `FIND("a", x)` with a blank or empty `x` is blank (not 0), and `LEFT("abc",
+  BLANK())` is `"abc"`; formula-compiler gives `""`, 1, 0 and `""`. `COUNTA(ERROR())` is 1 (the `ERROR()`
+  argument is counted, though an error from `{t} * 2` makes `COUNTA` an error); formula-compiler gives `#ERROR!`.
 - In JS, pass `fieldTypes` so an empty text field is `""` (needed for the `*` / `/` rule); without it an
   empty field is treated as an empty number.
 - `Number()` hex/binary forms (`"0x10"`) are not supported.
@@ -138,7 +163,11 @@ Airtable behaves much like JavaScript.
   1000045291; months beyond 2^31 seem to be capped, `DATE(2024,1E10,1)` = 65362736589). These cases are todo.
 - `EDATE` / `EOMONTH` clamp to the month's end; `WEEKDAY` types 1, 2, 3 and 11-17; `HOUR` / `MINUTE` /
   `SECOND` round to the nearest second; `DATEDIF` with `"D"`, `"M"`, `"Y"`, `"YM"`.
-- `TODAY()` / `NOW()` use the `timeZone` option (default UTC).
+- `TODAY()` / `NOW()` use the `timeZone` option (default UTC): give it the spreadsheet's time zone (File →
+  Settings). Checked 2026-10-29 by reading `NOW()` at a known UTC moment in a sheet set to `Etc/GMT`,
+  `Asia/Bangkok` and `America/Los_Angeles`: the serial is the local wall-clock time (00:23:06.007Z is
+  46324.307708414 in Bangkok; 00:23:20.228Z is 46323.724539676 in Los Angeles, where `TODAY()` is still
+  46323). `tests/core.test.ts` checks the `timeZone` and `now` options give the same serials in JS and SQL.
 - `VLOOKUP` exact match (`FALSE`) ignores case and takes `*` `?` `~` wildcards; the first matching row wins.
   Approximate match (the default) returns the last of the largest keys <= the search key. Numbers never match
   text (`VLOOKUP("10", …)` finds nothing). A column past the table is `#REF!`; nothing found is `#N/A`.

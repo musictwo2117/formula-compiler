@@ -3,6 +3,25 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## Unreleased
+
+### Added
+
+- **Airtable `COUNT`, `COUNTA` and `COUNTALL`** with plain arguments (JS and SQL). Rollup and lookup fields
+  are still not supported.
+
+### Fixed
+
+Airtable blanks, checked by field type in a real base:
+
+- An unchecked checkbox is empty text, as in Airtable: `{chk} * 2` is `#ERROR!` (was 0).
+- `!=` keeps a real blank (empty number field, `BLANK()`) apart from `""` and 0: `{n} != ""` is true (was false).
+- A real blank against text in `<` `>` `<=` `>=` is the number 0: `{n} < "a"` is false (was true).
+- `LEN`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `REPLACE`, `VALUE` of a real blank, `SEARCH` in one and `SUBSTITUTE`
+  with one as the replacement are `#ERROR!` (were `""` / 0).
+- `T()` of a non-text value is `""` (was blank), so `LEN(T(5))` is 0.
+- `AVERAGE`, `MIN` and `MAX` skip booleans; `MIN` / `MAX` with no numbers are 0 (were Infinity / -Infinity).
+
 ## 0.2.3 — 2026-10-29
 
 ### Fixed

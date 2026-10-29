@@ -108,6 +108,53 @@ describe("errors", () => {
   });
 });
 
+describe("TODAY() / NOW() with the timeZone option", () => {
+  // Google Sheets, checked 2026-10-29: the same moment read in sheets set to each time zone (the
+  // UTC clock was bracketed around each read; NOW() as TEXT(NOW(), "0.000000000") and as a time).
+  const reads = [
+    { timeZone: "Etc/GMT", now: "2026-10-29T00:22:47.925Z", today: 46324, now_: 46324.015832465 },
+    { timeZone: "Asia/Bangkok", now: "2026-10-29T00:23:06.007Z", today: 46324, now_: 46324.307708414 },
+    { timeZone: "America/Los_Angeles", now: "2026-10-29T00:23:20.228Z", today: 46323, now_: 46323.724539676 },
+  ];
+  let db: PGlite;
+  beforeAll(async () => {
+    db = new PGlite();
+    await db.waitReady;
+  });
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  it("gives the serial Google Sheets gives in that time zone (checked in Google Sheets 2026-10-29)", async () => {
+    for (const r of reads) {
+      for (const [formula, want] of [["=NOW()", r.now_], ["=TODAY()", r.today]] as const) {
+        const js = compile(formula, { from: "sheets", to: "js", timeZone: r.timeZone });
+        expect(js.evaluate({}, { now: r.now }) as number, `${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
+        const sql = compile(formula, { from: "sheets", to: "sql", timeZone: r.timeZone, now: r.now });
+        const res = await db.query<{ v: number }>(`SELECT ${sql.sql} AS v`);
+        expect(res.rows[0]!.v, `SQL ${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
+      }
+    }
+  });
+});
+
+describe("Airtable blanks without fieldTypes (JS)", () => {
+  // The probe formula of the "blank number or currency field" case in tests/cases/airtable.json.
+  const probe = (f: string) =>
+    `"[" & (${f}+1) & "|" & (${f}-1) & "|" & (-${f}) & "|" & IF(ISERROR(${f}*2),"ERR",${f}*2) & "|" & IF(ISERROR(${f}/2),"ERR",${f}/2) & "|" & ${f} & "|" & (${f}="") & "|" & (${f}=0) & "|" & (${f}=BLANK()) & "|" & (${f}!="") & "|" & (${f}<1) & "|" & (${f}>-1) & "|" & IF(${f},"t","f") & "|" & IF(ISERROR(LEN(${f})),"ERR",LEN(${f})) & "|" & NOT(${f}) & "|" & (${f}=FALSE()) & "|" & SUM(${f},1) & "|" & AVERAGE(${f},2) & "|" & T(${f}) & "]"`;
+
+  it("reads null or a missing field as an empty number field and false as an unchecked checkbox (checked in Airtable 2026-10-29)", () => {
+    const f = compile(probe("{x}"), { from: "airtable", to: "js" });
+    const emptyNumber = "[1|-1|0|0|0||TRUE|TRUE|TRUE|TRUE|TRUE|TRUE|f|ERR|TRUE|TRUE|1|2|]";
+    expect(f.evaluate({ x: null })).toBe(emptyNumber);
+    expect(f.evaluate({})).toBe(emptyNumber);
+    expect(f.evaluate({ x: false })).toBe("[1|-1|0|ERR|ERR||TRUE|TRUE|TRUE|FALSE|TRUE|TRUE|f|0|TRUE|TRUE|1|2|]");
+    // An empty text field needs fieldTypes: without it, null is an empty number field.
+    const typed = compile(probe("{x}"), { from: "airtable", to: "js", fieldTypes: { x: "text" } });
+    expect(typed.evaluate({ x: null })).toBe("[1|-1|0|ERR|ERR||TRUE|TRUE|TRUE|FALSE|TRUE|TRUE|f|0|TRUE|TRUE|1|2|]");
+  });
+});
+
 describe("Date field values", () => {
   const savedTz = process.env.TZ;
   afterAll(() => {
