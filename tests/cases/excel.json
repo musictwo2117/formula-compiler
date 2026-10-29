@@ -182,6 +182,8 @@
   {"name": "other sheet", "formula": "=Other!B2", "columnMap": {"B": "x"}, "options": {"sheetName": "Sheet1"}, "record": {"x": 1}, "error": {"code": "UNSUPPORTED_REFERENCE"}},
   {"name": "unmapped column", "formula": "=B2+E2", "columnMap": {"B": "x"}, "record": {"x": 1}, "error": {"code": "UNKNOWN_COLUMN", "start": 4}},
   {"name": "whole column outside an aggregate", "formula": "=B:B+1", "columnMap": {"B": "x"}, "record": {"x": 1}, "error": {"code": "UNSUPPORTED_REFERENCE"}},
+  {"name": "open-ended range (rows to the end)", "formula": "=SUM(B2:B)", "columnMap": {"B": "x", "C": "y"}, "record": {"x": 1, "y": 1}, "error": {"code": "UNSUPPORTED_REFERENCE", "start": 5, "end": 9}},
+  {"name": "open-ended range (from the top)", "formula": "=SUM(B:B10)", "columnMap": {"B": "x", "C": "y"}, "record": {"x": 1, "y": 1}, "error": {"code": "UNSUPPORTED_REFERENCE", "start": 5, "end": 10}},
   {"name": "unknown function", "formula": "=FOO(1)", "error": {"code": "UNKNOWN_FUNCTION", "functionName": "FOO", "start": 1, "end": 4}},
   {"name": "OFFSET not supported yet", "formula": "=OFFSET(1, 2, 3)", "error": {"code": "UNSUPPORTED_FUNCTION", "functionName": "OFFSET"}},
   {"name": "workday functions not supported yet", "formula": "=NETWORKDAYS(1, 10)", "error": {"code": "UNSUPPORTED_FUNCTION", "functionName": "NETWORKDAYS"}},

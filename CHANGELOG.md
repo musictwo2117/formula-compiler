@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## Unreleased
+
+### Fixed
+
+- **Open-ended ranges (`A2:A`, `A:A10`) are rejected with `UNSUPPORTED_REFERENCE`**, as the README says, instead of
+  a `SYNTAX` error ("Unexpected character ':'").
+
 ## 0.3.0 — 2026-10-29
 
 ### Added

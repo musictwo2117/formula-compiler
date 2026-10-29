@@ -97,6 +97,12 @@ describe("errors", () => {
     expect(e.message).toBe("[Excel] Function OFFSET is not supported yet (supported lookup functions: VLOOKUP, XLOOKUP, MATCH, INDEX) (at position 6-11)");
   });
 
+  it("reports open-ended ranges as UNSUPPORTED_REFERENCE, not SYNTAX", () => {
+    const e = compileError(() => compile("=SUM(A2:A)", { from: "sheets", to: "js", columnMap: { A: "a" } }));
+    expect(e.code).toBe("UNSUPPORTED_REFERENCE");
+    expect(e.message).toBe("[Google Sheets] Range A2:A: open-ended ranges are not supported yet; use whole columns (A:A) or both rows (A2:A10) (at position 6-9)");
+  });
+
   it("reports a bad timeZone or now as INVALID_OPTION, not RangeError", () => {
     for (const to of ["js", "sql"] as const) {
       const e = compileError(() => compile("=TODAY()", { from: "sheets", to, timeZone: "Asia/Bangkokk" }));

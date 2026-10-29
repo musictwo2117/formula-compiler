@@ -56,7 +56,10 @@ interface RefMatch {
   end: number;
 }
 
-/** Try to read A1, $A$1, A1:B2 or A:A at pos. */
+/**
+ * Try to read A1, $A$1, A1:B2 or A:A at pos. Open-ended ranges (A2:A, A:A10) are read too, so the
+ * resolver can reject them as UNSUPPORTED_REFERENCE rather than as a syntax error.
+ */
 function readReference(src: string, pos: number, sheet: string | undefined): RefMatch | null {
   const rest = src.slice(pos);
   const a = CELL.exec(rest);
@@ -68,6 +71,11 @@ function readReference(src: string, pos: number, sheet: string | undefined): Ref
         const end = afterA + 1 + b[0].length;
         return { token: { kind: "range", end, value: { sheet, from: cellOf(a), to: cellOf(b) } }, end };
       }
+      const d = COL.exec(src.slice(afterA + 1));
+      if (d && colNumber(d[2]!) <= MAX_COL && refEnds(src, afterA + 1 + d[0].length)) {
+        const end = afterA + 1 + d[0].length;
+        return { token: { kind: "range", end, value: { sheet, from: cellOf(a), to: colOf(d) } }, end };
+      }
     }
     if (refEnds(src, afterA)) return { token: { kind: "cell", end: afterA, value: { sheet, address: cellOf(a) } }, end: afterA };
   }
@@ -78,6 +86,11 @@ function readReference(src: string, pos: number, sheet: string | undefined): Ref
     if (d && refEnds(src, start2 + d[0].length)) {
       const end = start2 + d[0].length;
       return { token: { kind: "range", end, value: { sheet, from: colOf(c), to: colOf(d) } }, end };
+    }
+    const b = CELL.exec(src.slice(start2));
+    if (b && colNumber(b[2]!) <= MAX_COL && refEnds(src, start2 + b[0].length)) {
+      const end = start2 + b[0].length;
+      return { token: { kind: "range", end, value: { sheet, from: colOf(c), to: cellOf(b) } }, end };
     }
   }
   return null;
