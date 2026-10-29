@@ -109,13 +109,15 @@ describe("errors", () => {
 });
 
 describe("TODAY() / NOW() with the timeZone option", () => {
-  // Google Sheets, checked 2026-10-29: the same moment read in sheets set to each time zone (the
-  // UTC clock was bracketed around each read; NOW() as TEXT(NOW(), "0.000000000") and as a time).
+  // Checked 2026-10-29: NOW() read at a known moment (the UTC clock was bracketed around each read;
+  // NOW() as TEXT(NOW(), "0.000000000") and as a time). Google Sheets in sheets set to each time zone;
+  // Excel for the web in a browser in Asia/Bangkok (it uses the browser's local time).
   const reads = [
-    { timeZone: "Etc/GMT", now: "2026-10-29T00:22:47.925Z", today: 46324, now_: 46324.015832465 },
-    { timeZone: "Asia/Bangkok", now: "2026-10-29T00:23:06.007Z", today: 46324, now_: 46324.307708414 },
-    { timeZone: "America/Los_Angeles", now: "2026-10-29T00:23:20.228Z", today: 46323, now_: 46323.724539676 },
-  ];
+    { from: "sheets", timeZone: "Etc/GMT", now: "2026-10-29T00:22:47.925Z", today: 46324, now_: 46324.015832465 },
+    { from: "sheets", timeZone: "Asia/Bangkok", now: "2026-10-29T00:23:06.007Z", today: 46324, now_: 46324.307708414 },
+    { from: "sheets", timeZone: "America/Los_Angeles", now: "2026-10-29T00:23:20.228Z", today: 46323, now_: 46323.724539676 },
+    { from: "excel", timeZone: "Asia/Bangkok", now: "2026-10-29T00:36:01.820Z", today: 46324, now_: 46324.316687732 },
+  ] as const;
   let db: PGlite;
   beforeAll(async () => {
     db = new PGlite();
@@ -125,14 +127,14 @@ describe("TODAY() / NOW() with the timeZone option", () => {
     await db?.close();
   });
 
-  it("gives the serial Google Sheets gives in that time zone (checked in Google Sheets 2026-10-29)", async () => {
+  it("gives the serial the program gives in that time zone (checked in Google Sheets and Excel 2026-10-29)", async () => {
     for (const r of reads) {
       for (const [formula, want] of [["=NOW()", r.now_], ["=TODAY()", r.today]] as const) {
-        const js = compile(formula, { from: "sheets", to: "js", timeZone: r.timeZone });
-        expect(js.evaluate({}, { now: r.now }) as number, `${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
-        const sql = compile(formula, { from: "sheets", to: "sql", timeZone: r.timeZone, now: r.now });
+        const js = compile(formula, { from: r.from, to: "js", timeZone: r.timeZone });
+        expect(js.evaluate({}, { now: r.now }) as number, `${r.from} ${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
+        const sql = compile(formula, { from: r.from, to: "sql", timeZone: r.timeZone, now: r.now });
         const res = await db.query<{ v: number }>(`SELECT ${sql.sql} AS v`);
-        expect(res.rows[0]!.v, `SQL ${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
+        expect(res.rows[0]!.v, `${r.from} SQL ${formula} in ${r.timeZone}`).toBeCloseTo(want, 8);
       }
     }
   });
