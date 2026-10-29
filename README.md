@@ -47,8 +47,8 @@ compile(formula, { from: "airtable" | "sheets" | "excel", to: "js" | "sql" | "as
 | `tableName` | Excel | Optional check for `Table1[...]` references. |
 | `locale` | Sheets, Excel | `{ argumentSeparator: ";", decimalSeparator: "," }` for `=ROUND(1,5;0)`. |
 | `fieldTypes` | SQL target | `{ income: "number", name: "text", ok: "boolean", due: "date" }` — required for every referenced field. Sheets/Excel `date` fields (`"2024-01-15"`, `"2024-01-15T10:30"` or a `Date`; a `timestamp` column in SQL) become serial numbers. |
-| `table` / `tableAlias` | SQL target | Table that whole-column ranges (`A:A`) aggregate over, and the alias of the outer row. |
-| `orderBy` | SQL target | Field that gives the row order (row 1, row 2, …) for `VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX`; it must be unique and not null. JS uses the order of `ctx.rows`. |
+| `table` / `tableAlias` | SQL target | Table that ranges (`A:A`, `A2:A10`) read, and the alias of the outer row. |
+| `orderBy` | SQL target | Field that gives the row order (row 1, row 2, …) for bounded ranges (`A2:A10`) and for `VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX`; it must be unique and not null. JS uses the order of `ctx.rows`. |
 | `timeZone` / `now` | Sheets, Excel | Time zone for `TODAY()` / `NOW()` (IANA name, default `"UTC"`), and a fixed "now" for SQL (JS reads `ctx.now`). |
 
 ### JavaScript
@@ -59,8 +59,8 @@ r.evaluate({ sales: 10, visits: 0 }); // "-"
 r.evaluate({ sales: 10, visits: 4 }); // 2.5
 ```
 
-Errors come back as `FormulaError` values (`isError(v)`, `v.code === "#DIV/0!"`). Whole-column ranges read
-`ctx.rows`: `evaluate(row, { rows })`. To run the generated `code` yourself, pass `runtimeFor(dialect)`
+Errors come back as `FormulaError` values (`isError(v)`, `v.code === "#DIV/0!"`). Ranges (`A:A`, `A2:A10`)
+read `ctx.rows`: `evaluate(row, { rows })`, with `rows[0]` as the row after the header. To run the generated `code` yourself, pass `runtimeFor(dialect)`
 (also exported from `@musictwo2117/formula-compiler/runtime`) as `rt`.
 
 Generated code for the Airtable example:
@@ -101,7 +101,7 @@ types (`IF(x, "yes", 0)`), the result is `jsonb`. Whole-column aggregates become
 compile("IF({Unit Price} * {Qty} > 100, 'big', BLANK())", { from: "airtable", to: "js" });
 ```
 
-**Google Sheets** — `=` optional, `<>`, `^`, `50%`, `$A$1`, `'Sheet name'!A1`, `A:A` in aggregates, `;` locale:
+**Google Sheets** — `=` optional, `<>`, `^`, `50%`, `$A$1`, `'Sheet name'!A1`, `A:A` and `A2:A10` in aggregates and lookups, `;` locale:
 
 ```ts
 compile("=IF(B2>1; \"a\"; \"b\")", { from: "sheets", to: "js", columnMap: { B: "x" }, locale: { argumentSeparator: ";" } });
@@ -132,8 +132,8 @@ age.evaluate({ born: "1990-05-20" }, { now: "2026-10-28T09:00:00Z" }); // 36
 
 Excel's 1900 calendar is followed too (it has a 1900-02-29, so `DATE(1900,1,1)` is 1 in Excel and 2 in Sheets).
 
-`VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX` work over whole columns. In JS they read `ctx.rows`; in SQL they read
-`table`, in the order of the `orderBy` field:
+`VLOOKUP`, `XLOOKUP`, `MATCH` and `INDEX` work over whole columns and bounded ranges (`A2:B10`). In JS they read
+`ctx.rows`; in SQL they read `table`, in the order of the `orderBy` field:
 
 ```ts
 const rows = [{ sku: "A1", price: 10 }, { sku: "B2", price: 25 }];
@@ -258,10 +258,12 @@ Sheets/Excel, and `ROUND` digits are optional only in Sheets) are documented in
 - **Every rule was checked against the real programs** (Airtable, Google Sheets and Excel for the web,
   2026-10-28). See [docs/behavior-notes.md](docs/behavior-notes.md).
 - Airtable: the JS target needs `fieldTypes` to tell an empty text field from an empty number field.
-- References: only cells in the formula's own row, and whole columns (`A:A`, `Table1[col]`) inside aggregates
-  and lookups (multi-column `D:F` only as the `VLOOKUP` / `INDEX` table). Bounded ranges (`A2:A10`), other rows,
-  other sheets and whole rows are rejected with `UNSUPPORTED_REFERENCE`. Whole columns hold the data rows only:
-  the header row reads as empty (`INDEX(B:B, 1)` is blank, not the header text).
+- References: only cells in the formula's own row, plus whole columns (`A:A`, `Table1[col]`) and bounded ranges
+  (`A2:A10`) inside aggregates and lookups (multi-column `D:F` / `D2:F10` only as the `VLOOKUP` / `INDEX`
+  table). Other rows, other sheets, whole rows, open-ended ranges (`A2:A`) and ranges that include the header row
+  (`A1:A10`) are rejected with `UNSUPPORTED_REFERENCE`. Whole columns hold the data rows only: the header row
+  reads as empty (`INDEX(B:B, 1)` is blank, not the header text). `SUMIF` / `XLOOKUP` ranges must cover the same
+  rows.
 - Dates: Sheets/Excel serial dates and 15 date functions; Airtable dates, `NETWORKDAYS`/`WORKDAY`, `WEEKNUM`,
   `DATEVALUE`, `TEXT` and `DATEDIF` units `"MD"`/`"YD"` are not supported yet.
 - Text outside ASCII: case-insensitive comparisons lower-case both sides, so a few letters (`σ`/`ς`, `İ`) differ

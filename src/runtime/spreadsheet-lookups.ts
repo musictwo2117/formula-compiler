@@ -65,12 +65,12 @@ function columnsOf(range: TableArg | RefArg): readonly (readonly Value[])[] {
   return isRefArg(range) ? [range.values] : range.columns;
 }
 
-type Column = (ctx: EvalContext | undefined, name: string, type?: string) => RefArg;
+type Column = (ctx: EvalContext | undefined, name: string, type?: string, first?: number, count?: number) => RefArg;
 
 export function spreadsheetLookupFunctions(N: ToNumber, B: ToBool, col: Column = column) {
   return {
-    table(ctx: EvalContext | undefined, names: readonly string[], types: readonly (string | undefined)[]): TableArg {
-      return { table: true, columns: names.map((n, i) => col(ctx, n, types[i]).values) };
+    table(ctx: EvalContext | undefined, names: readonly string[], types: readonly (string | undefined)[], first?: number, count?: number): TableArg {
+      return { table: true, columns: names.map((n, i) => col(ctx, n, types[i], first, count).values) };
     },
 
     /** VLOOKUP(key, table, column, [approximate = TRUE]). */
@@ -103,28 +103,34 @@ export function spreadsheetLookupFunctions(N: ToNumber, B: ToBool, col: Column =
       return result.values[i] ?? null;
     },
 
-    /** MATCH(key, range, [type = 1]) — position counted from row 1 of the sheet. */
-    MATCH(key: Value, range: RefArg, type: Value, headerRow: number): Value {
+    /** MATCH(key, range, [type = 1]) — position in the range; `offset` rows (the header rows of a whole column) come before the values. */
+    MATCH(key: Value, range: RefArg, type: Value, offset: number): Value {
       if (isError(key)) return key;
       const t = N(type);
       if (isError(t)) return t;
       const k = Math.trunc(t);
       const mode: MatchMode = k === 0 ? "wildcard" : k > 0 ? "le" : "ge";
       const i = findIndex(range.values, key, mode, k !== 0);
-      return i < 0 ? NA() : headerRow + 1 + i;
+      return i < 0 ? NA() : offset + 1 + i;
     },
 
-    /** INDEX(range, row, [column]) — rows counted from row 1 of the sheet; header and empty rows are blank. */
-    INDEX(range: TableArg | RefArg, row: Value, col: Value, headerRow: number): Value {
+    /**
+     * INDEX(range, row, [column]) — rows counted from the top of the range; `offset` rows (the header rows of a
+     * whole column) come before the values and are blank. A bounded range of `count` rows gives `low` for rows
+     * below 1 and `past` after its end (the error codes differ between Sheets and Excel).
+     */
+    INDEX(range: TableArg | RefArg, row: Value, col: Value, offset: number, count = Infinity, low = "#VALUE!", past = "#REF!"): Value {
       const r = N(row);
       if (isError(r)) return r;
       const c = N(col);
       if (isError(c)) return c;
       const cols = columnsOf(range);
       const [ri, ci] = [Math.trunc(r), Math.trunc(c)];
-      if (ri < 1 || ci < 1) return new FormulaError("#VALUE!");
+      if (ri < 1) return new FormulaError(low);
+      if (ci < 1) return new FormulaError("#VALUE!");
       if (ci > cols.length) return new FormulaError("#REF!");
-      return cols[ci - 1]![ri - headerRow - 1] ?? null;
+      if (ri > count) return new FormulaError(past);
+      return cols[ci - 1]![ri - offset - 1] ?? null;
     },
   };
 }

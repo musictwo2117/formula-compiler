@@ -1,4 +1,4 @@
-import { isCellAddress, type BoundNode, type CellAddress, type Node, type Span } from "./ast";
+import { isCellAddress, type BoundNode, type CellAddress, type Node, type RowSpan, type Span } from "./ast";
 import type { Fail } from "./errors";
 import { describeArity, isColumnArg, registry, unknownFunctionMessage, type FunctionSpec } from "./registry";
 import type { CompileOptions, Dialect } from "./types";
@@ -10,7 +10,7 @@ export interface ResolveContext {
   fail: Fail;
 }
 
-const AGGREGATE_HINT = "whole-column ranges are only supported as arguments of aggregate functions such as SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF and SUMIF";
+const AGGREGATE_HINT = "ranges are only supported as arguments of aggregate and lookup functions such as SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF and VLOOKUP";
 
 /**
  * Turns the parse tree into the bound tree: cell and structured references
@@ -84,8 +84,21 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
       case "Range": {
         const text = formulaText(node);
         sheetCheck(node.sheet, span);
+        let rows: RowSpan | undefined;
         if (isCellAddress(node.from) || isCellAddress(node.to)) {
-          return fail("UNSUPPORTED_REFERENCE", `Range ${text}: bounded ranges are not supported yet; only same-row cells and whole columns (A:A) inside aggregate functions`, node.start, node.end);
+          if (!isCellAddress(node.from) || !isCellAddress(node.to)) {
+            return fail("UNSUPPORTED_REFERENCE", `Range ${text}: open-ended ranges are not supported yet; use whole columns (A:A) or both rows (A2:A10)`, node.start, node.end);
+          }
+          const [top, bottom] = [node.from.row, node.to.row].sort((x, y) => x - y) as [number, number];
+          if (top <= headerRow) {
+            return fail(
+              "UNSUPPORTED_REFERENCE",
+              `Range ${text} includes the header row (${headerRow}); start it at row ${headerRow + 1}, or set headerRow`,
+              node.start,
+              node.end,
+            );
+          }
+          rows = { first: top - headerRow - 1, count: bottom - top + 1 };
         }
         if (node.from.col !== node.to.col) {
           if (!tableAllowed) {
@@ -94,10 +107,11 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
           const [a, b] = [colNumber(node.from.col), colNumber(node.to.col)].sort((x, y) => x - y) as [number, number];
           const names: string[] = [];
           for (let c = a; c <= b; c++) names.push(columnField(colLetters(c), span, text));
-          return { kind: "table", names, ...span };
+          return rows ? { kind: "table", names, rows, ...span } : { kind: "table", names, ...span };
         }
         if (!columnAllowed) return fail("UNSUPPORTED_REFERENCE", `Range ${text}: ${AGGREGATE_HINT}`, node.start, node.end);
-        return { kind: "column", name: columnField(node.from.col, span, text), ...span };
+        const name = columnField(node.from.col, span, text);
+        return rows ? { kind: "column", name, rows, ...span } : { kind: "column", name, ...span };
       }
       case "StructuredRef": {
         const text = formulaText(node);
@@ -124,7 +138,7 @@ export function resolve(root: Node, ctx: ResolveContext): BoundNode {
         for (const i of spec.requiredColumnArgs ?? []) {
           const a = args[i];
           if (a && a.kind !== "column" && a.kind !== "table") {
-            fail("INVALID_ARGUMENT", `Argument ${i + 1} of ${node.name} must be a whole-column range (e.g. A:A) in this version`, a.start, a.end, node.name);
+            fail("INVALID_ARGUMENT", `Argument ${i + 1} of ${node.name} must be a range (e.g. A:A or A2:A10) in this version`, a.start, a.end, node.name);
           }
         }
         const call = { kind: "call" as const, name: node.name, args, ...span };

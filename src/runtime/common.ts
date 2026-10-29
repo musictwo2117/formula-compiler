@@ -69,10 +69,14 @@ export function dateField(raw: unknown, field: string): Value {
   return msToSerial(ms);
 }
 
-export function column(ctx: EvalContext | undefined, field: string, type?: string): RefArg {
-  if (!ctx?.rows) throw new TypeError(`The formula uses a whole-column range of "${field}"; pass ctx.rows`);
+/** A whole column, or `count` rows from data row `first` (rows past the data are blank, as in a sheet). */
+export function column(ctx: EvalContext | undefined, field: string, type?: string, first?: number, count?: number): RefArg {
+  if (!ctx?.rows) throw new TypeError(`The formula uses a range of "${field}"; pass ctx.rows`);
   const read = type === "date" ? dateField : normalize;
-  return { ref: true, values: ctx.rows.map((r) => read(r[field], field)) };
+  if (first === undefined || count === undefined) return { ref: true, values: ctx.rows.map((r) => read(r[field], field)) };
+  const values: Value[] = [];
+  for (let i = first; i < first + count; i++) values.push(i < ctx.rows.length ? read(ctx.rows[i]![field], field) : null);
+  return { ref: true, values };
 }
 
 /** Numeric text as accepted by the coercion rules (both JS and SQL use this pattern). */

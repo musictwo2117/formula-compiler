@@ -227,6 +227,32 @@ describe("SQL lookups", () => {
     expect(res.rows[0]).toEqual({ v: expected, e: null });
   });
 
+  it.each([
+    ["=SUM(C3:C4)", 50],
+    ["=COUNTIF(B2:B9,\"apple\")", 2],
+    ["=COUNTIF(B3:B9,\"\")", 5],
+    ["=VLOOKUP(\"apple\",B3:C4,2,FALSE)", 20],
+    ["=MATCH(\"cherry\",B3:B4,0)", 2],
+    ["=INDEX(B3:C4,2,1)", "cherry"],
+  ])("bounded range %s takes rows in orderBy order", async (formula, expected) => {
+    expect(compile(formula, { ...options, to: "js" }).evaluate(rows[0]!, { rows })).toBe(expected);
+    const sql = compile(formula, { ...options, to: "sql" });
+    const res = await db.query<{ v: unknown; e: string | null }>(`SELECT ${sql.sql} AS v, ${sql.errorSql} AS e FROM "fruit" WHERE "n" = 1`);
+    expect(res.rows[0]).toEqual({ v: expected, e: null });
+  });
+
+  it("counts bounded-range rows from the headerRow option", () => {
+    const opts = { ...options, headerRow: 3, to: "js" as const };
+    expect(compile("=SUM(C4:C5)", opts).evaluate(rows[0]!, { rows })).toBe(30);
+    expect(compileError(() => compile("=SUM(C3:C5)", opts)).reason).toMatch(/includes the header row \(3\)/);
+  });
+
+  it("asks for orderBy when a bounded range is used in SQL", () => {
+    const e = compileError(() => compile("=SUM(C2:C3)", { ...options, orderBy: undefined, to: "sql" }));
+    expect(e.code).toBe("INVALID_OPTION");
+    expect(e.reason).toMatch(/orderBy/);
+  });
+
   it("does not renumber the table for every row", () => {
     // A window per outer row made lookups quadratic; plain comparisons also let PostgreSQL use an index.
     const sql = compile("=VLOOKUP(C2,C:C,1,FALSE)", { ...options, to: "sql" });

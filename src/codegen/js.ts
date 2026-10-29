@@ -50,11 +50,16 @@ export class JsGen {
         if (this.fieldTypes[n.name] === "date") return `rt.date(record[${jsString(n.name)}], ${jsString(n.name)})`;
         return `rt.v(record[${jsString(n.name)}], ${jsString(n.name)})`;
       }
-      case "table":
-        return `rt.table(ctx, [${n.names.map(jsString).join(", ")}], [${n.names.map((name) => (this.fieldTypes[name] ? jsString(this.fieldTypes[name]!) : "undefined")).join(", ")}])`;
-      case "column":
-        if (this.fieldTypes[n.name] === "date") return `rt.col(ctx, ${jsString(n.name)}, "date")`;
-        return `rt.col(ctx, ${jsString(n.name)})`;
+      case "table": {
+        const types = n.names.map((name) => (this.fieldTypes[name] ? jsString(this.fieldTypes[name]!) : "undefined"));
+        const rows = n.rows ? `, ${n.rows.first}, ${n.rows.count}` : "";
+        return `rt.table(ctx, [${n.names.map(jsString).join(", ")}], [${types.join(", ")}]${rows})`;
+      }
+      case "column": {
+        const type = this.fieldTypes[n.name] === "date" ? `"date"` : "undefined";
+        if (n.rows) return `rt.col(ctx, ${jsString(n.name)}, ${type}, ${n.rows.first}, ${n.rows.count})`;
+        return type === "undefined" ? `rt.col(ctx, ${jsString(n.name)})` : `rt.col(ctx, ${jsString(n.name)}, ${type})`;
+      }
       case "unary":
         return `rt.${n.operator === "-" ? "neg" : "pos"}(${this.expr(n.operand)})`;
       case "percent":

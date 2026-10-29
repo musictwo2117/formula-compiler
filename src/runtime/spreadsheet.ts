@@ -217,6 +217,8 @@ export function matchesCriterion(cell: Value, crit: Criterion, variant: Spreadsh
       if (isNe) return cell !== null && cell !== "";
       return false;
     case "number":
+      // Sheets: "<>5" skips blank cells, which Excel counts (checked 2026-10-29).
+      if (cell === null && variant === "sheets") return false;
       // "=5" also matches the text "5" (but "<>5" does not exclude it), in Sheets and Excel.
       if (isEq && typeof cell === "string") return cell !== "" && textToNumber(cell, variant) === operand.value;
       if (typeof cell !== "number") return isNe;
@@ -248,8 +250,8 @@ const findText = (n: string, h: string, from: number): number => indexOfChars(ch
 export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
   /** Real-calendar serials of date fields → the program's serials (Excel's 1900 offset). */
   const toCalendar = (v: Value): Value => (typeof v === "number" ? fromRealSerial(v, variant) : v);
-  const dateColumn = (ctx: EvalContext | undefined, name: string, type?: string): RefArg => {
-    const c = column(ctx, name, type);
+  const dateColumn = (ctx: EvalContext | undefined, name: string, type?: string, first?: number, count?: number): RefArg => {
+    const c = column(ctx, name, type, first, count);
     return type === "date" ? { ref: true, values: c.values.map(toCalendar) } : c;
   };
   const A = (a: Value, b: Value, f: (x: number, y: number) => number | FormulaError) => arith(a, b, f, variant);
@@ -291,13 +293,13 @@ export function createSpreadsheetRuntime(variant: SpreadsheetVariant) {
 
   return {
     ...spreadsheetDateFunctions(N, X, variant),
-    ...spreadsheetLookupFunctions(N, toBool, (ctx, name, type) => dateColumn(ctx, name, type)),
+    ...spreadsheetLookupFunctions(N, toBool, dateColumn),
     v: normalize,
     /** Date fields as serials in the program's calendar. */
     date: (raw: unknown, name: string): Value => toCalendar(dateField(raw, name)),
     err: (code: string): Value => e(code),
     ref: (x: Value): RefArg => ({ ref: true, values: [x] }),
-    col: (ctx: EvalContext | undefined, name: string, type?: string): RefArg => dateColumn(ctx, name, type),
+    col: (ctx: EvalContext | undefined, name: string, type?: string, first?: number, count?: number): RefArg => dateColumn(ctx, name, type, first, count),
     /** Excel shows an empty referenced cell as 0 when it is the whole result; Sheets shows it empty. */
     result: (x: Value): Value => (variant === "excel" && x === null ? 0 : x),
 

@@ -9,7 +9,7 @@
  * When branches of IF/SWITCH/IFERROR have different types the value is
  * carried as jsonb (type "any") and coerced at run time.
  */
-import type { BinaryOperator, BoundCall, BoundNode, Span } from "../core/ast";
+import type { BinaryOperator, BoundCall, BoundNode, RowSpan, Span } from "../core/ast";
 import type { Fail } from "../core/errors";
 import { registry } from "../core/registry";
 import type { CompileOptions, Dialect, FieldType } from "../core/types";
@@ -404,17 +404,33 @@ export class SqlGen {
     return `${INNER}.${quoteIdent(name)}`;
   }
 
-  /** `(SELECT agg FROM table AS "__fc_r")` — agg receives the inner column expression. */
-  columnQuery(name: string, span: Span, select: (col: string, type: FieldType) => string, where?: (col: string, type: FieldType) => string): string {
-    const table = this.options.table;
-    if (!table) {
-      return this.fail("INVALID_OPTION", `Whole-column ranges need the SQL table name: pass the table option`, span.start, span.end);
+  /**
+   * FROM item of a range, aliased "__fc_r": the whole table, or for a bounded range (A2:A10) its rows in orderBy
+   * order. Rows past the data are simply missing; callers that count blanks add them back.
+   */
+  rangeFrom(rows: RowSpan | undefined, span: Span): string {
+    const { table, orderBy } = this.options;
+    if (!table) return this.fail("INVALID_OPTION", `Ranges need the SQL table name: pass the table option`, span.start, span.end);
+    if (!rows) return `${quoteIdent(table)} AS ${INNER}`;
+    if (!orderBy) {
+      return this.fail("INVALID_OPTION", "Bounded ranges (A2:A10) need the row order in SQL: pass orderBy (a field that numbers the rows)", span.start, span.end);
     }
-    const raw = this.fieldType(name, span);
+    return `(SELECT * FROM ${quoteIdent(table)} ORDER BY ${quoteIdent(orderBy)} OFFSET ${rows.first} LIMIT ${rows.count}) AS ${INNER}`;
+  }
+
+  /** `(SELECT agg FROM table AS "__fc_r")` — agg receives the inner column expression. */
+  columnQuery(
+    name: string,
+    range: Span & { rows?: RowSpan },
+    select: (col: string, type: FieldType) => string,
+    where?: (col: string, type: FieldType) => string,
+  ): string {
+    const from = this.rangeFrom(range.rows, range);
+    const raw = this.fieldType(name, range);
     // Date columns take part as serial numbers.
     const [col, type]: [string, FieldType] = raw === "date" ? [this.dateFieldSerial(this.innerColumn(name)), "number"] : [this.innerColumn(name), raw];
     const w = where ? ` WHERE ${where(col, type)}` : "";
-    return `(SELECT ${select(col, type)} FROM ${quoteIdent(table)} AS ${INNER}${w})`;
+    return `(SELECT ${select(col, type)} FROM ${from}${w})`;
   }
 
   // ---- kinds & coercion

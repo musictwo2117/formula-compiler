@@ -65,6 +65,12 @@ export function isCellAddress(a: CellAddress | ColumnAddress): a is CellAddress 
   return "row" in a;
 }
 
+/** Rows of a bounded range (A2:A10): data rows `first` (0-based, row headerRow + 1 is 0) to first + count - 1. */
+export interface RowSpan {
+  first: number;
+  count: number;
+}
+
 /**
  * The resolved tree that code generators consume: references are turned into
  * field names, functions are looked up in the registry.
@@ -76,10 +82,10 @@ export type BoundNode =
   | (Span & { kind: "error"; code: ErrorCode })
   /** A value of the current record (Airtable field, same-row cell, [@col]). */
   | (Span & { kind: "field"; name: string })
-  /** Every value of a field across all rows (whole-column range). */
-  | (Span & { kind: "column"; name: string })
-  /** Several whole columns side by side (D:F), for lookups. */
-  | (Span & { kind: "table"; names: string[] })
+  /** Every value of a field across all rows (whole-column range), or the rows of a bounded range. */
+  | (Span & { kind: "column"; name: string; rows?: RowSpan })
+  /** Several columns side by side (D:F, D2:F10), for lookups. */
+  | (Span & { kind: "table"; names: string[]; rows?: RowSpan })
   | (Span & { kind: "unary"; operator: "-" | "+"; operand: BoundNode })
   | (Span & { kind: "percent"; operand: BoundNode })
   | (Span & { kind: "binary"; operator: BinaryOperator; left: BoundNode; right: BoundNode })

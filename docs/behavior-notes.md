@@ -124,6 +124,9 @@ Airtable behaves much like JavaScript.
 - `COUNTIF`: `"5"` and `5` also match cells holding the **text** `"5"`, but `">4"` and `"<>5"` only look at
   numbers; `""` matches empty cells; an empty criterion **cell** matches nothing; wildcards and case
   rules as in `SEARCH`.
+- `COUNTIF(range, "<>5")` does **not** count empty cells (Excel does), but `"<>x"` does:
+  `COUNTIF(A2:A11,"<>3")` = 2 and `COUNTIF(C2:C11,"<>x")` = 9 for the same 10 rows with 3 and 1 filled
+  (checked 2026-10-29; this also applies to whole columns).
 
 ### Dates and lookups (Google Sheets)
 
@@ -186,6 +189,24 @@ Airtable behaves much like JavaScript.
   (`DATE(2024,1,1E9)` = `DATE(2024,1,-1E9)` = `DATE(2024,1,32767)` = 78058). `EDATE` has no such limit
   (`EDATE(45000,90000)` = 2784318).
 - Lookups behave like Sheets (all 25 lookup probes gave the same answers).
+
+### Bounded ranges (Google Sheets, Excel)
+
+Checked in both programs on 2026-10-29 with the same rows; the cases are in `tests/cases/*.json`.
+
+- `A2:A10` works wherever a whole column does: aggregates (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`),
+  `COUNTIF` / `SUMIF` and the lookups (`D2:F10` as a `VLOOKUP` / `INDEX` table). `A5:A2` is the same as `A2:A5`.
+- Rows count from the header: with `headerRow` 1, row 2 is the first record (`rows[0]` in JS, the first row in
+  `orderBy` order in SQL). A range may not include the header row (`A1:A10` is rejected), since the header cell
+  holds text formula-compiler does not have.
+- Rows past the last record are empty cells: `COUNTIF(A2:A11, "")` counts them, `INDEX(A2:A11, 8)` is blank.
+- `MATCH` gives the position inside the range (`MATCH(5, A3:A6, 0)` = 3); `INDEX` counts rows from the top of
+  the range. `INDEX` past the end of the range is `#NUM!` in Sheets and `#REF!` in Excel; a row below 1 is
+  `#NUM!` in Sheets and `#VALUE!` in Excel.
+- `SUMIF` and `XLOOKUP` ranges must cover the same rows. Sheets and Excel resize a `SUMIF` sum range from its
+  top-left cell, and give `#N/A` (Sheets) or `#VALUE!` (Excel) for `XLOOKUP` ranges of different sizes;
+  formula-compiler rejects both with `UNSUPPORTED_FEATURE`.
+- Open-ended ranges (`A2:A`) are not supported yet.
 
 ### Lookups in SQL
 

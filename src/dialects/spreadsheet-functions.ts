@@ -10,7 +10,7 @@ import type { FieldType } from "../core/types";
 import type { JsGen } from "../codegen/js";
 import { errorIf, quoteText, spreadsheetNumberSql, sqlNumber, sqlTimestampSerial, type SqlGen, type SqlVal } from "../codegen/sql";
 import { registerSpreadsheetDates } from "./spreadsheet-dates";
-import { registerSpreadsheetLookups } from "./spreadsheet-lookups";
+import { registerSpreadsheetLookups, sameRows } from "./spreadsheet-lookups";
 import { NUMERIC_TEXT_SQL, type RoundMode } from "../runtime/common";
 import { parseCriterion, type Criterion, type SpreadsheetVariant } from "../runtime/spreadsheet";
 import { DATE_FUNCTIONS, definer, lazyArgsJs, numericSql, roundDigits, roundSql, sqlArgs, substituteNthSql, textSql } from "./shared";
@@ -101,8 +101,9 @@ function operandSql(col: string, type: FieldType, op: CriterionOp, operand: SqlO
         const p = spreadsheetNumberSql(col, variant);
         return `COALESCE(${col} <> '' AND ${p.valid} AND ${p.v} = ${operand.sql}, FALSE)`;
       }
-      if (type !== "number") return ne;
-      if (op === "<>") return `(${col} IS NULL OR ${col} <> ${operand.sql})`;
+      // Sheets: "<>5" skips blank cells, which Excel counts (checked 2026-10-29).
+      if (type !== "number") return op === "<>" && variant === "sheets" ? `${col} IS NOT NULL` : ne;
+      if (op === "<>") return variant === "sheets" ? `COALESCE(${col} <> ${operand.sql}, FALSE)` : `(${col} IS NULL OR ${col} <> ${operand.sql})`;
       return `COALESCE(${col} ${op} ${operand.sql}, FALSE)`;
     case "boolean":
       if (type !== "boolean") return ne;
@@ -469,12 +470,19 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
     maxArgs: 2,
     columnArgs: [0],
     requiredColumnArgs: [0],
-    summary: 'COUNTIF(range, criterion) — range must be a whole column; criteria like ">5", "<>x", "a*", ">"&C2',
+    summary: 'COUNTIF(range, criterion) — range such as A:A or A2:A10; criteria like ">5", "<>x", "a*", ">"&C2',
     js: (c, g) => g.call("COUNTIF", [g.expr(c.args[0]!), g.expr(c.args[1]!)]),
     sql: (c, g) => {
       const range = c.args[0] as BoundNode & { kind: "column" };
       const crit = criterionOf(g, c.args[1]!);
-      return g.make("number", g.columnQuery(range.name, range, () => "COUNT(*)::float8", crit.where), [crit.err]);
+      const counted = g.columnQuery(range.name, range, () => "COUNT(*)::float8", crit.where);
+      if (!range.rows) return g.make("number", counted, [crit.err]);
+      // Rows of the range past the data are blank cells: count them when the criterion matches a blank.
+      const raw = g.fieldType(range.name, range);
+      const t = raw === "date" ? "number" : raw;
+      const blank = `NULL::${t === "number" ? "float8" : t}`;
+      const missing = `(${range.rows.count}::float8 - ${g.columnQuery(range.name, range, () => "COUNT(*)::float8")})`;
+      return g.make("number", `(${counted} + CASE WHEN COALESCE(${crit.where(blank, t)}, FALSE) THEN ${missing} ELSE 0::float8 END)`, [crit.err]);
     },
   });
 
@@ -484,7 +492,8 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
     maxArgs: 3,
     columnArgs: [0, 2],
     requiredColumnArgs: [0, 2],
-    summary: "SUMIF(range, criterion, [sum_range]) — ranges must be whole columns",
+    summary: "SUMIF(range, criterion, [sum_range]) — sum_range must cover the same rows as range",
+    validate: (c, fail) => sameRows(c, [0, 2], fail),
     js: (c, g) => g.call("SUMIF", c.args.map((a) => g.expr(a))),
     sql: (c, g) => {
       const range = c.args[0] as BoundNode & { kind: "column" };

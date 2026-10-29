@@ -3,6 +3,20 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## Unreleased
+
+### Added
+
+- **Bounded ranges (Google Sheets, Excel):** `SUM(A2:A10)`, `COUNTIF(A2:A10, ">5")`, `VLOOKUP(x, D2:F10, 2, FALSE)`
+  and the other aggregates and lookups that took whole columns. Rows count from the header row; rows past the
+  data are empty cells. In SQL they need `orderBy`. Checked in Sheets and Excel for the web (44 cases).
+
+### Fixed
+
+- **Sheets `COUNTIF(range, "<>5")` no longer counts empty cells** (Excel does, and still does here); `"<>x"` still
+  counts them in both.
+- Unsupported lookup functions (`OFFSET`, `HLOOKUP`, …) name the supported ones in their error message.
+
 ## 0.2.3 — 2026-10-29
 
 ### Fixed
