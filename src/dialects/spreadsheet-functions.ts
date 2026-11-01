@@ -220,8 +220,16 @@ export function registerSpreadsheetFunctions(variant: SpreadsheetVariant): void 
       sql: (c, g) => {
         const x = g.expr(c.args[0]!);
         if (x.err === null) return x;
-        const cond: SqlVal = { v: test(x.err), t: "boolean", err: null, nullable: false };
-        return g.chain([{ cond, then: g.expr(c.args[1]!) }], x);
+        const fallback = g.expr(c.args[1]!);
+        // The value's error is tested and returned, so bind it (and the value) once: nested IFERRORs
+        // would otherwise multiply the SQL.
+        const build = (v: string, err: string): SqlVal =>
+          g.chain([{ cond: { v: test(err), t: "boolean", err: null, nullable: false }, then: fallback }], { ...x, v, err });
+        const shape = build(x.v, x.err);
+        const v = g.bind([x.v, x.err], (xv, xe) => build(xv, xe).v);
+        // The error never reads the value: binding only the error keeps the value out of it.
+        const err = shape.err === null ? null : g.bind([x.err], (xe) => build(x.v, xe).err ?? "NULL");
+        return { ...shape, v, err };
       },
     });
   }

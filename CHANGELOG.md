@@ -3,6 +3,18 @@
 All notable changes to this project are listed here. Versions follow [semver](https://semver.org/);
 while the version is 0.x, a minor release can change behaviour to match the source program more closely.
 
+## 0.3.1 — 2026-11-02
+
+### Fixed
+
+- **Nested text → number conversions no longer blow up the SQL or crash `compile()`.** The conversion repeated
+  its input 86 times, so `VALUE(VALUE(A2&"")&"")` was 15.9 million characters and three levels threw
+  `RangeError`. Long inputs are now computed once wherever a value is examined by kind, and in `/`, `^` and
+  `IFERROR` / `IFNA`: three levels of `VALUE` are 38,877 characters in Sheets, four levels in Airtable 3,140
+  (was 81 million).
+- **`compile()` never throws `RangeError` for SQL.** SQL longer than 1,000,000 characters (value plus error) is a
+  `FormulaCompileError` with code `UNSUPPORTED_IN_SQL`; the limit is exported as `MAX_SQL_LENGTH`.
+
 ## 0.3.0 — 2026-10-29
 
 ### Added

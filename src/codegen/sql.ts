@@ -80,7 +80,15 @@ export function coalesce(errs: (string | null | undefined)[]): string | null {
   return `COALESCE(${list.join(", ")})`;
 }
 
-export function caseOf(arms: { when: string | null; then: string }[]): string {
+export /** CASE over the arms' values, and over their errors when any arm can fail. */
+function joinArms(arms: { when: string | null; part: Part }[]): Part {
+  const v = caseOf(arms.map((a) => ({ when: a.when, then: a.part.v })));
+  const anyErr = arms.some((a) => a.part.err !== null);
+  const err = anyErr ? caseOf(arms.map((a) => ({ when: a.when, then: a.part.err ?? "NULL" }))) : null;
+  return { v, err };
+}
+
+function caseOf(arms: { when: string | null; then: string }[]): string {
   if (arms.length === 0) return "NULL";
   const last = arms[arms.length - 1]!;
   if (arms.length === 1 && last.when === null) return last.then;
@@ -479,19 +487,36 @@ export class SqlGen {
     return x.nullable ? [{ k: "blank", when: blankWhen(x.v), e: "NULL" }, arm] : [arm];
   }
 
+  /**
+   * Runs `f` on each runtime kind of `x` and joins the results with CASE. Every arm (and every WHEN)
+   * mentions `x`, so a long `x` is bound once first: otherwise each level of nesting multiplies the SQL
+   * (text → number used to repeat its input 86 times, and three nested VALUE()s overflowed a string).
+   */
   dispatch(x: SqlVal, f: (a: KindArm) => Part): Part {
-    const arms = this.kinds(x).map((a) => ({ when: a.when, part: f(a) }));
-    const v = caseOf(arms.map((a) => ({ when: a.when, then: a.part.v })));
-    const anyErr = arms.some((a) => a.part.err !== null);
-    const err = anyErr ? caseOf(arms.map((a) => ({ when: a.when, then: a.part.err ?? "NULL" }))) : null;
-    return { v, err };
+    return this.bindPart(x, (y) => this.dispatchArms(y, f));
   }
 
   dispatch2(a: SqlVal, b: SqlVal, f: (x: KindArm, y: KindArm) => Part): Part {
-    const outer = this.kinds(a).map((ka) => ({ when: ka.when, part: this.dispatch(b, (kb) => f(ka, kb)) }));
-    const v = caseOf(outer.map((o) => ({ when: o.when, then: o.part.v })));
-    const anyErr = outer.some((o) => o.part.err !== null);
-    const err = anyErr ? caseOf(outer.map((o) => ({ when: o.when, then: o.part.err ?? "NULL" }))) : null;
+    return this.bindPart(a, (x) => {
+      const outer = this.kinds(x).map((ka) => ({ when: ka.when, part: this.dispatch(b, (kb) => f(ka, kb)) }));
+      return joinArms(outer.map((o) => ({ when: o.when, part: o.part })));
+    });
+  }
+
+  private dispatchArms(x: SqlVal, f: (a: KindArm) => Part): Part {
+    return joinArms(this.kinds(x).map((a) => ({ when: a.when, part: f(a) })));
+  }
+
+  /** `build` on `x`, with a long `x.v` evaluated once (one binding for the value, one for the error). */
+  private bindPart(x: SqlVal, build: (x: SqlVal) => Part): Part {
+    if (x.kinds || x.v.length <= BIND_MIN_LENGTH || SIMPLE_SQL.test(x.v)) return build(x);
+    let hasErr = false;
+    const v = this.bind([x.v], (ref) => {
+      const p = build({ ...x, v: ref });
+      hasErr = p.err !== null;
+      return p.v;
+    });
+    const err = hasErr ? this.bind([x.v], (ref) => build({ ...x, v: ref }).err ?? "NULL") : null;
     return { v, err };
   }
 
@@ -669,19 +694,28 @@ export class SqlGen {
       case "/": {
         const x = this.mulDivNumber(a);
         const y = this.mulDivNumber(b);
+        // The operands appear several times below: bind long ones once, or nesting multiplies the SQL.
         if (this.sem.divZero === "ieee") {
-          const zero = `CASE WHEN ${x.v} = 'NaN'::float8 OR ${x.v} = 0 THEN 'NaN'::float8 WHEN ${x.v} > 0 THEN 'Infinity'::float8 ELSE '-Infinity'::float8 END`;
-          return this.make("number", `CASE WHEN ${y.v} = 0 THEN ${zero} ELSE ${x.v} / ${y.v} END`, [x.err, y.err]);
+          const v = this.bind([x.v, y.v], (xv, yv) => {
+            const zero = `CASE WHEN ${xv} = 'NaN'::float8 OR ${xv} = 0 THEN 'NaN'::float8 WHEN ${xv} > 0 THEN 'Infinity'::float8 ELSE '-Infinity'::float8 END`;
+            return `CASE WHEN ${yv} = 0 THEN ${zero} ELSE ${xv} / ${yv} END`;
+          });
+          return this.make("number", v, [x.err, y.err]);
         }
-        return this.make("number", `(${x.v} / NULLIF(${y.v}, 0))`, [x.err, y.err, errorIf(`${y.v} = 0`, this.sem.divZero)]);
+        const divZero = this.sem.divZero;
+        const v = this.bind([y.v], (yv) => `(${x.v} / NULLIF(${yv}, 0))`);
+        return this.make("number", v, [x.err, y.err, this.bind([y.v], (yv) => errorIf(`${yv} = 0`, divZero))]);
       }
       case "^": {
         const x = this.toNumber(a);
         const y = this.toNumber(b);
-        const zeroZero = this.dialect === "excel" ? ` WHEN ${x.v} = 0 AND ${y.v} = 0 THEN '#NUM!'` : "";
         const zeroNeg = this.dialect === "sheets" ? "'#NUM!'" : "'#DIV/0!'";
-        const err = `CASE WHEN ${x.v} = 0 AND ${y.v} < 0 THEN ${zeroNeg}${zeroZero} WHEN ${x.v} < 0 AND ${y.v} <> trunc(${y.v}) THEN '#NUM!' END`;
-        const v = `CASE WHEN (${x.v} = 0 AND ${y.v} < 0) OR (${x.v} < 0 AND ${y.v} <> trunc(${y.v})) THEN NULL ELSE power(${x.v}, ${y.v}) END`;
+        const err = this.bind([x.v, y.v], (xv, yv) => {
+          const zeroZero = this.dialect === "excel" ? ` WHEN ${xv} = 0 AND ${yv} = 0 THEN '#NUM!'` : "";
+          return `CASE WHEN ${xv} = 0 AND ${yv} < 0 THEN ${zeroNeg}${zeroZero} WHEN ${xv} < 0 AND ${yv} <> trunc(${yv}) THEN '#NUM!' END`;
+        });
+        const v = this.bind([x.v, y.v], (xv, yv) =>
+          `CASE WHEN (${xv} = 0 AND ${yv} < 0) OR (${xv} < 0 AND ${yv} <> trunc(${yv})) THEN NULL ELSE power(${xv}, ${yv}) END`);
         return this.make("number", v, [x.err, y.err, err]);
       }
       default:

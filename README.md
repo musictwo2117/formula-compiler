@@ -356,8 +356,10 @@ that still differ, are in [docs/behavior-notes.md](docs/behavior-notes.md).
   matches Sheets but `LEFT` / `MID` across an emoji can differ.
 - **Far-future dates.** Google Sheets dates after 99999-12-31 are `#NUM!` here; Sheets still gives a number.
 - **SQL size and range.** Literal `COUNTIF` / `SUMIF` criteria (`">5"`, `"a*"`) become plain SQL, but computed
-  ones (`">"&C2`) are parsed row by row and make a much longer expression. The SQL repeats sub-expressions, so it
-  grows quickly when error-producing expressions are nested deeply (date functions are not affected). Very large
+  ones (`">"&C2`) are parsed row by row and make a much longer expression. Long sub-expressions are computed once,
+  but the value and its error are separate expressions, so a few shapes still double per level (`IFERROR` around
+  `VALUE` nested many times). SQL longer than 1,000,000 characters (`MAX_SQL_LENGTH`) is refused with
+  `UNSUPPORTED_IN_SQL`; the `js` target has no such limit. Very large
   numbers can overflow `double precision` and make PostgreSQL raise an error.
 - **SQL speed.** An index on the lookup column makes `VLOOKUP` / `XLOOKUP` fast, and an index on the `orderBy`
   field keeps small ranges of a big table fast. `MATCH` and `INDEX` take longer the further down the row is.

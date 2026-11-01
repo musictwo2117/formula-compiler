@@ -119,10 +119,21 @@ export function compile(formula: string, options: CompileOptions): CompileResult
     const rt = runtimeFor(dialect);
     return { target: "js", dialect, code, evaluate: (record, ctx) => fn(record ?? {}, rt, ctx ?? {}) };
   }
-  const g = new SqlGen(dialect, options, makeFail(dialect, formula));
-  let value = g.expr(bound);
-  if (isTopLevelSearch(bound, dialect)) value = { ...value, v: `NULLIF(${value.v}, 0::float8)`, nullable: true };
-  const out = g.finish(value);
+  const fail = makeFail(dialect, formula);
+  const tooLarge = () =>
+    fail("UNSUPPORTED_IN_SQL", `The SQL for this formula would be longer than ${MAX_SQL_LENGTH.toLocaleString("en-US")} characters; simplify the formula or use the js target`, 0, formula.length);
+  const g = new SqlGen(dialect, options, fail);
+  let out: ReturnType<SqlGen["finish"]>;
+  try {
+    let value = g.expr(bound);
+    if (isTopLevelSearch(bound, dialect)) value = { ...value, v: `NULLIF(${value.v}, 0::float8)`, nullable: true };
+    out = g.finish(value);
+  } catch (e) {
+    // A string past V8's limit: some nesting still multiplies the SQL (value and error are separate expressions).
+    if (e instanceof RangeError) return tooLarge();
+    throw e;
+  }
+  if (out.value.length + out.error.length > MAX_SQL_LENGTH) return tooLarge();
   return {
     target: "sql",
     dialect,
@@ -132,6 +143,9 @@ export function compile(formula: string, options: CompileOptions): CompileResult
     sqlType: out.type === "blank" ? null : SQL_TYPE_NAMES[out.type],
   };
 }
+
+/** Longest SQL (value plus error expression) compile() returns; past it, a FormulaCompileError. */
+export const MAX_SQL_LENGTH = 1_000_000;
 
 /** Shorthand: compile to JS and return the evaluator. */
 export function createEvaluator(formula: string, options: Omit<CompileOptions, "to">) {

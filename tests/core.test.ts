@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDb, type TestDb } from "./db";
-import { compile, FormulaCompileError, parseFormula, registry } from "../src/index";
+import { compile, FormulaCompileError, parseFormula, registry, type Dialect } from "../src/index";
 import { quoteIdent, quoteText } from "../src/codegen/sql";
 
 function compileError(fn: () => unknown): FormulaCompileError {
@@ -338,6 +338,54 @@ describe("SQL lookups", () => {
     const plan = await db.query<{ "QUERY PLAN": string }>(`EXPLAIN SELECT ${sql.sql} FROM "fruit"`);
     await db.exec("RESET enable_seqscan");
     expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/Index (Only )?Scan using fruit_price_idx/);
+  });
+});
+
+describe("SQL size of conversions and errors", () => {
+  // Text → number repeated its input 86 times in the SQL: VALUE(VALUE(A2&"")&"") was 15.9 million
+  // characters and three levels threw RangeError. These limits keep the growth in check.
+  const deep = (w: (x: string) => string, depth: number, x = "A2") => Array.from({ length: depth }).reduce<string>((f) => w(f), x);
+  const size = (from: Dialect, formula: string) => {
+    const opts = from === "airtable" ? { fieldTypes: { a: "number" as const } } : { columnMap: { A: "a" }, fieldTypes: { a: "number" as const } };
+    const out = compile(formula, { from, to: "sql", ...opts });
+    return out.sql.length + out.errorSql.length;
+  };
+  const VALUE = (x: string) => `VALUE(${x}&"")`;
+
+  it.each([
+    ["sheets", "=" + deep(VALUE, 3), 60_000],
+    ["excel", "=" + deep(VALUE, 3), 150_000],
+    ["sheets", "=" + deep((x) => `(${x}&"")*1`, 3), 60_000],
+    ["sheets", "=" + deep((x) => `LEN(${x}&"")`, 4), 15_000],
+    ["sheets", "=" + deep((x) => `IFERROR(1/${x},0)`, 4), 20_000],
+    ["excel", "=" + deep((x) => `(${x})^2`, 8), 25_000],
+    ["airtable", deep(VALUE, 4, "{a}"), 5_000],
+  ] as const)("%s %s stays under %i characters", (from, formula, limit) => {
+    expect(size(from, formula)).toBeLessThan(limit);
+  });
+
+  it("runs three nested VALUE()s in PostgreSQL with the JS result", async () => {
+    const formula = "=" + deep(VALUE, 3);
+    const opts = { from: "sheets" as const, columnMap: { A: "a" }, fieldTypes: { a: "number" as const }, table: "t" };
+    const db = await openDb();
+    try {
+      await db.exec(`CREATE TABLE "t" ("a" float8); INSERT INTO "t" VALUES (42.5)`);
+      const sql = compile(formula, { ...opts, to: "sql" });
+      const res = await db.query<{ v: number; e: string | null }>(`SELECT ${sql.sql} AS v, ${sql.errorSql} AS e FROM "t"`);
+      expect(res.rows[0]).toEqual({ v: 42.5, e: null });
+      expect(compile(formula, { ...opts, to: "js" }).evaluate({ a: 42.5 })).toBe(42.5);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fails with FormulaCompileError, not RangeError, when the SQL would be too large", () => {
+    // Value and error are separate expressions, so IFERROR over VALUE still doubles per level.
+    const formula = "=" + deep((x) => `IFERROR(VALUE(${x}&""),0)`, 12);
+    const e = compileError(() => compile(formula, { from: "excel", to: "sql", columnMap: { A: "a" }, fieldTypes: { a: "number" } }));
+    expect(e.code).toBe("UNSUPPORTED_IN_SQL");
+    expect(e.reason).toMatch(/longer than 1,000,000 characters/);
+    expect(compile(formula, { from: "excel", to: "js", columnMap: { A: "a" } }).evaluate({ a: 3 })).toBe(3);
   });
 });
 
