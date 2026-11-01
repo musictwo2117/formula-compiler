@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>formula-compiler social card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=block" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1220;
+    --panel: #171b2e;
+    --line: #2a3050;
+    --text: #e8ebf7;
+    --muted: #9aa3c7;
+    --green: #21a366;
+    --accent: #7c9cff;
+    --str: #f6c177;
+    --kw: #c4a7e7;
+    --num: #7fd1b9;
+    --ident: #9ccfd8;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 675px; }
+  body {
+    background: radial-gradient(1200px 500px at 85% -10%, #26306a 0%, transparent 60%), var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans Thai", system-ui, sans-serif;
+    padding: 44px 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+  header { display: flex; justify-content: space-between; align-items: flex-end; }
+  h1 { font-size: 44px; font-weight: 700; line-height: 1.15; letter-spacing: -0.5px; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .brand { text-align: right; }
+  .brand b { font-family: "JetBrains Mono", monospace; font-size: 22px; font-weight: 600; }
+  .brand span { display: block; color: var(--muted); font-size: 16px; margin-top: 4px; }
+
+  main { display: grid; grid-template-columns: 380px 52px minmax(0, 1fr); align-items: center; gap: 0; flex: 1; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .card .bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 15px; color: var(--muted); }
+  .dot { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; font: 700 12px "JetBrains Mono", monospace; color: #fff; }
+  .card pre { font-family: "JetBrains Mono", "IBM Plex Sans Thai", monospace; font-size: 15.5px; line-height: 1.6; padding: 16px 18px; white-space: pre; }
+  .sheet .bar .dot { background: var(--green); }
+  .sheet .cell { display: grid; grid-template-columns: 44px 1fr; font-size: 15px; }
+  .sheet .cell div { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .sheet .cell div:first-child { color: var(--muted); border-right: 1px solid var(--line); text-align: center; }
+  .formula { font-family: "JetBrains Mono", "IBM Plex Sans Thai", monospace; font-size: 17px; line-height: 1.6; padding: 18px; }
+  .works { display: flex; gap: 8px; padding: 0 18px 18px; flex-wrap: wrap; }
+  .chip { font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .arrow { text-align: center; font-size: 34px; color: var(--accent); }
+  .outputs { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .sql .dot { background: #336791; }
+  .js .dot { background: #d6b100; color: #1b1b1b; }
+  .kw { color: var(--kw); } .str { color: var(--str); } .num { color: var(--num); } .id { color: var(--ident); } .cm { color: var(--muted); }
+
+  footer { display: flex; justify-content: space-between; align-items: center; }
+  .badges { display: flex; gap: 10px; }
+  .badge { font-size: 16px; font-weight: 600; padding: 8px 14px; border-radius: 10px; background: #1d2340; border: 1px solid var(--line); }
+  .badge i { font-style: normal; color: var(--num); margin-right: 6px; }
+  .install { font-family: "JetBrains Mono", monospace; font-size: 16px; color: var(--muted); }
+  .install b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>สูตรใน Sheets / Excel / Airtable<br>→ <em>JavaScript</em> และ <em>SQL</em> อัตโนมัติ</h1>
+    <div class="brand"><b>formula-compiler</b><span>ฟรี · โอเพนซอร์ส (MIT)</span></div>
+  </header>
+
+  <main>
+    <section class="card sheet">
+      <div class="bar"><span class="dot">X</span> สูตรใน Excel / Google Sheets</div>
+      <div class="cell"><div>fx</div><div class="formula"><span class="kw">=IF</span>(<span class="kw">AND</span>(<span class="id">B2</span>&gt;<span class="num">30000</span>, <span class="id">C2</span>&lt;<span class="num">60</span>),
+    <span class="str">"ผ่าน"</span>, <span class="str">"ไม่ผ่าน"</span>)</div></div>
+      <div class="works"><span class="chip">B = income</span><span class="chip">C = age</span><span class="chip">ชื่อช่องภาษาไทยได้</span></div>
+    </section>
+
+    <div class="arrow">→</div>
+
+    <div class="outputs">
+      <section class="card sql">
+        <div class="bar"><span class="dot">SQL</span> PostgreSQL</div>
+<pre><span class="kw">CASE WHEN</span> ((<span class="kw">COALESCE</span>(<span class="id">"income"</span>, <span class="num">0</span>::float8) &gt; <span class="num">30000</span>::float8)
+      <span class="kw">AND</span> (<span class="kw">COALESCE</span>(<span class="id">"age"</span>, <span class="num">0</span>::float8) &lt; <span class="num">60</span>::float8))
+<span class="kw">THEN</span> <span class="str">'ผ่าน'</span> <span class="kw">ELSE</span> <span class="str">'ไม่ผ่าน'</span> <span class="kw">END</span></pre>
+      </section>
+      <section class="card js">
+        <div class="bar"><span class="dot">JS</span> JavaScript / TypeScript</div>
+<pre><span class="kw">const</span> f = <span class="id">compile</span>(formula, { from: <span class="str">"excel"</span>, to: <span class="str">"js"</span>,
+  columnMap: { B: <span class="str">"income"</span>, C: <span class="str">"age"</span> } });
+f.<span class="id">evaluate</span>({ income: <span class="num">40000</span>, age: <span class="num">30</span> }); <span class="cm">// "ผ่าน"</span></pre>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="badges">
+      <span class="badge"><i>✓</i>ตรวจกับโปรแกรมจริงทั้ง 3 ตัว</span>
+      <span class="badge"><i>✓</i>JS กับ SQL ได้ผลตรงกัน</span>
+      <span class="badge"><i>✓</i>สูตรผิด บอกตำแหน่งชัด</span>
+    </div>
+    <div class="install">npm i <b>@musictwo2117/formula-compiler</b></div>
+  </footer>
+</body>
+</html>
